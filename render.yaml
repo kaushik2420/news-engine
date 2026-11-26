@@ -1,0 +1,66 @@
+# Render Blueprint: Postgres + API/MCP web service + always-on worker.
+# Render dashboard -> New -> Blueprint -> pick this repo. Everything below is created together.
+# Region: singapore (closest Render region to India). Change all three together if you move it.
+
+databases:
+  - name: news-engine-db
+    plan: 0.5c-1g              # ~30 days of stories for a few hundred sources; scale up later in the dashboard
+    region: singapore
+    databaseName: news_engine
+    user: news_engine
+
+envVarGroups:
+  - name: news-engine-shared
+    envVars:
+      - key: ENGINE_API_KEY      # admin key (sources, webhooks, admin); read it from the dashboard after creation
+        generateValue: true
+      - key: ENGINE_READ_KEY     # key for the app and Claude (feeds, stories, briefs)
+        generateValue: true
+      - key: TAG_MODEL
+        value: claude-haiku-5-5
+      - key: WRITE_MODEL
+        value: claude-sonnet-5-5
+      - key: ENGINE_USER_AGENT
+        value: NewsEngineBot/1.0 (+https://engine.backyardsaas.com/bot)
+      - key: PER_DOMAIN_INTERVAL_SEC
+        value: "2"
+      - key: DEFAULT_SOURCE_INTERVAL_MIN
+        value: "20"
+
+services:
+  - type: web
+    name: news-engine-api
+    runtime: python
+    region: singapore
+    plan: 0.5c-512mb
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
+    domains:
+      - engine.backyardsaas.com  # add the DNS CNAME Render shows for this domain
+    healthCheckPath: /           # liveness only; /health also reports the worker heartbeat (use it for monitoring)
+    autoDeployTrigger: commit      # redeploy on every push to main
+    envVars:
+      - fromGroup: news-engine-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: news-engine-db
+          property: connectionString
+      - key: ANTHROPIC_API_KEY   # optional; leave blank for keyword tagging + briefs only
+        sync: false
+
+  - type: worker
+    name: news-engine-worker
+    runtime: python
+    region: singapore
+    plan: 0.5c-512mb
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m engine.worker
+    autoDeployTrigger: commit      # redeploy on every push to main
+    envVars:
+      - fromGroup: news-engine-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: news-engine-db
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false

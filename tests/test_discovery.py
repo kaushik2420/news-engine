@@ -52,3 +52,10 @@ def test_roundup_detection():
     assert is_roundup("Flipkart CEO Ousted, PhonePe Revives IPO & More")
     assert is_roundup("Funding Galore: Indian Startups Raised $200 Mn This Week")
     assert not is_roundup("Vegapay Bags $10 Mn To Scale Credit Line On UPI Infrastructure")
+
+
+def test_database_url_normalised_for_hosts():
+    from engine.db import normalize_url
+    assert normalize_url("postgresql://u:p@h:5432/d") == "postgresql+psycopg://u:p@h:5432/d"
+    assert normalize_url("postgres://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
+    assert normalize_url("sqlite:///x.db") == "sqlite:///x.db"

@@ -157,10 +157,18 @@ Index("ix_stories_tag_queue", stories.c.tag_status, stories.c.updated_at)
 _engine: Engine | None = None
 
 
+def normalize_url(url: str) -> str:
+    """Hosts (Render, Heroku, Neon...) hand out postgres:// or postgresql:// URLs; use the psycopg 3 driver."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
-        url = S.settings.database_url
+        url = normalize_url(S.settings.database_url)
         kw = {"pool_pre_ping": True, "future": True}
         if url.startswith("sqlite"):
             kw["connect_args"] = {"check_same_thread": False, "timeout": 30}

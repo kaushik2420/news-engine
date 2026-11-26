@@ -59,7 +59,12 @@ Or everything with Docker: `cp .env.example .env && docker compose up -d --build
 
 ## Deploy
 
-The engine needs **two always-on processes** (API, worker) and **Postgres**. Any host that runs a Docker image
+**Render (configured):** `render.yaml` is a Blueprint. Render dashboard → New → Blueprint → this repo creates
+`news-engine-db` (Postgres), `news-engine-api` (API + MCP, with `engine.backyardsaas.com`) and
+`news-engine-worker`, all in Singapore, redeploying on every push to `main`. The admin and read keys are generated
+for you (env group `news-engine-shared`); `ANTHROPIC_API_KEY` is asked for once (optional).
+
+**Anywhere else:** the engine needs **two always-on processes** (API, worker) and **Postgres**. Any host that runs a Docker image
 works. One image, two services:
 
 | Service | Command |
