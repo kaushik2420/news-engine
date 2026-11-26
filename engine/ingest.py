@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from urllib.parse import urljoin
 
 from sqlalchemy import and_, delete, func, or_, select
 
@@ -24,6 +25,7 @@ from .text import canonical_url, url_id
 
 log = logging.getLogger("engine.ingest")
 MAX_NEW_PER_PASS = 80
+COMMON_FEED_PATHS = ("/feed", "/feed/", "/rss", "/rss.xml", "/feed.xml", "/index.xml", "/atom.xml", "/rss/")
 REDISCOVER_DAYS = 7
 
 
@@ -59,6 +61,13 @@ async def autodiscover(fetcher: Fetcher, src) -> dict:
             feeds = feeds_in_html(r.content, r.url)
             if feeds:
                 found["rss_url"] = feeds[0]
+        if "rss_url" not in found:          # many sites don't advertise their feed: try the usual paths
+            for path in COMMON_FEED_PATHS:
+                url = urljoin(home, path)
+                rf = await fetcher.get(url)
+                if rf.ok and from_rss(rf.content):
+                    found["rss_url"] = rf.url
+                    break
     if not src.sitemap_url:
         _, maps = await fetcher.robots(home)
         for url in pick_news_sitemaps(maps)[:3]:
@@ -76,8 +85,9 @@ async def autodiscover(fetcher: Fetcher, src) -> dict:
                     if rk.ok and parse_sitemap(rk.content)[0] == "urlset":
                         found["sitemap_url"] = url      # keep the index: its children rotate over time
                         break
-    with db.get_engine().begin() as c:
-        c.execute(db.sources.update().where(db.sources.c.id == src.id).values(discovered_at=db.utcnow(), **found))
+    if found:   # only mark discovery done when it found something; otherwise retry on the next check
+        with db.get_engine().begin() as c:
+            c.execute(db.sources.update().where(db.sources.c.id == src.id).values(discovered_at=db.utcnow(), **found))
     return found
 
 
@@ -177,7 +187,8 @@ async def ingest_source(fetcher: Fetcher, source_id: str) -> dict:
     stats = {"source": source_id, "sitemap": 0, "rss": 0, "listing": 0}
     with Run("source", source_id) as run:
         try:
-            stale = not src.discovered_at or db.utcnow() - src.discovered_at > timedelta(days=REDISCOVER_DAYS)
+            no_channel = not (src.rss_url or src.sitemap_url or src.listing_url)
+            stale = no_channel or not src.discovered_at or db.utcnow() - src.discovered_at > timedelta(days=REDISCOVER_DAYS)
             if src.autodiscover and src.homepage and stale and not (src.rss_url and src.sitemap_url):
                 stats["discovered"] = await autodiscover(fetcher, src)
                 with db.get_engine().connect() as c:

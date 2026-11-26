@@ -131,6 +131,7 @@ def fixture_fetcher() -> Fetcher:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("trafilatura").setLevel(logging.ERROR)   # "discarding data" is routine; og: tags still captured
     p = argparse.ArgumentParser()
     p.add_argument("--once", action="store_true", help="run one cycle and exit")
     p.add_argument("--fixtures", action="store_true", help="use offline fixtures instead of the network")

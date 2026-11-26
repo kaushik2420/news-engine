@@ -73,3 +73,26 @@ def test_retention_runs(engine_env):
     full_cycle(engine_env["fetcher"])
     out = ingest.retention()
     assert set(out) >= {"bodies_cleared", "stories_deleted"}
+
+
+def test_autodiscovery_tries_common_feed_paths_and_retries(engine_env):
+    """Live YourStory case: homepage has no <link rel=alternate>, but /feed exists."""
+    from engine.fetch import Fetcher
+    from scripts.build_fixtures import rss
+    from tests.fixtures_transport import RAW, transport
+    pages = {"https://nolink.example/": ("text/html", "<html><head></head><body>no feed link</body></html>")}
+    f = Fetcher(transport=transport(extra=pages), per_domain_interval=0)
+    service.create_source({"id": "nolink", "name": "No link", "homepage": "https://nolink.example/"})
+    run(ingest.ingest_source(f, "nolink"))
+    s = service.get_source("nolink")
+    assert s["consecutive_failures"] == 1 and s["rss_url"] is None
+    with db.get_engine().connect() as c:       # nothing found -> discovery NOT marked done, so it retries
+        assert c.execute(select(db.sources.c.discovered_at).where(db.sources.c.id == "nolink")).scalar() is None
+
+    with db.get_engine().begin() as c:         # simulate a row stuck by older code: marked discovered, no channel
+        c.execute(db.sources.update().where(db.sources.c.id == "nolink").values(discovered_at=db.utcnow()))
+    pages["https://nolink.example/feed"] = ("application/rss+xml", rss("nolink", RAW["yourstory"][:3]))
+    f2 = Fetcher(transport=transport(extra=pages), per_domain_interval=0)
+    out = run(ingest.ingest_source(f2, "nolink"))
+    assert out["discovered"]["rss_url"] == "https://nolink.example/feed" and out["rss"] == 3
+    assert service.get_source("nolink")["consecutive_failures"] == 0
