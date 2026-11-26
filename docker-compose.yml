@@ -1,0 +1,36 @@
+# Local or single-server deployment: Postgres + API/MCP + worker.
+#   cp .env.example .env   (edit keys)   then   docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: engine
+      POSTGRES_PASSWORD: engine
+      POSTGRES_DB: news_engine
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engine"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://engine:engine@db:5432/news_engine
+    ports: ["8000:8000"]
+    depends_on: {db: {condition: service_healthy}}
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: python -m engine.worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://engine:engine@db:5432/news_engine
+    depends_on: {db: {condition: service_healthy}}
+    restart: unless-stopped
+
+volumes:
+  pgdata:

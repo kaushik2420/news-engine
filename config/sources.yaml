@@ -1,0 +1,40 @@
+# Seed sources. Loaded into the database on worker start (only sources not already there).
+# After that, manage sources through the API (POST/PATCH /v1/sources) or MCP (add_source / update_source).
+#
+# Discovery channels, best first:
+#   sitemap_url   Google News sitemap (or a sitemap index). Lists every article from the last ~48h.
+#   rss_url       RSS/Atom feed. Adds summaries and images for the newest items.
+#   listing_url   Section page to scan for article links (needs link_pattern). Fallback only.
+#   homepage      With autodiscover: true, the engine finds RSS + news sitemaps itself (homepage <link> + robots.txt).
+#
+# default_category must be a value from taxonomy.yaml. interval_min = how often to check.
+
+sources:
+  - id: inc42
+    name: Inc42
+    homepage: https://inc42.com/
+    sitemap_url: https://inc42.com/news-sitemap.xml        # from robots.txt, verified 2026-11-26
+    rss_url: https://inc42.com/feed/
+    region: India
+    default_category: Startups
+    interval_min: 15
+
+  - id: techcrunch
+    name: TechCrunch
+    homepage: https://techcrunch.com/
+    sitemap_url: https://techcrunch.com/news-sitemap.xml   # from robots.txt, verified 2026-11-26
+    rss_url: https://techcrunch.com/feed/
+    region: Global
+    default_category: Big Tech
+    interval_min: 15
+
+  - id: yourstory
+    name: YourStory
+    homepage: https://yourstory.com/                       # RSS + sitemap found automatically
+    region: India
+    default_category: Startups
+    interval_min: 20
+
+  # Add more by homepage alone; the engine discovers the rest. Examples to evaluate:
+  # - {id: entrackr, name: Entrackr, homepage: https://entrackr.com/, region: India, default_category: Startups}
+  # - {id: moneycontrol-startups, name: Moneycontrol, homepage: https://www.moneycontrol.com/, region: India, default_category: Markets}

@@ -1,0 +1,153 @@
+# Coupling guide: attaching the app to the News Engine
+
+The app (the coaches) carries users, onboarding, UI and posting. The **News Engine** (the locomotive) runs
+continuously in the background: it collects news, merges duplicates into stories, tags them, ranks feeds per
+user and prepares post briefs. The app never crawls anything itself; it asks the engine.
+
+There are three couplings. Use any or all:
+
+| Coupling | Use it for | How |
+|---|---|---|
+| **REST API** | The app's backend fetching feeds, stories, briefs | `https://<engine-host>/v1/...` with a bearer key |
+| **MCP** | Claude (Claude Code, the Claude app, Agent SDK) talking to the engine directly | `https://<engine-host>/mcp` |
+| **Webhooks** | The engine pushing new/trending stories to the app | Register a URL; verify the HMAC signature |
+
+Live, always-current docs for every route: `https://<engine-host>/docs` (OpenAPI at `/openapi.json`).
+
+---
+
+## 1. Keys
+
+| Key | Env var | Can do |
+|---|---|---|
+| Read key | `ENGINE_READ_KEY` | stories, search, trending, feeds, profiles, events, briefs, drafts, status |
+| Admin key | `ENGINE_API_KEY` | everything above + sources, webhooks, admin actions |
+
+Send as `Authorization: Bearer <key>`. Give the app's backend and Claude the **read key**; keep the admin key for
+operating the engine. Never ship either key to a browser or mobile client: call the engine from the app's backend.
+
+## 2. Connect Claude via MCP
+
+**Claude Code** (in the app's repo):
+```bash
+claude mcp add --transport http news-engine https://<engine-host>/mcp \
+  --header "Authorization: Bearer <ENGINE_READ_KEY>"
+```
+Or commit a `.mcp.json` (keep the key in an env var, not in git):
+```json
+{ "mcpServers": { "news-engine": {
+    "type": "http", "url": "https://<engine-host>/mcp",
+    "headers": { "Authorization": "Bearer ${NEWS_ENGINE_KEY}" } } } }
+```
+**Claude app (custom connector)**: if the connector form only takes a URL, use
+`https://<engine-host>/mcp?key=<ENGINE_READ_KEY>`. Treat that URL as a secret.
+
+### MCP tools
+| Tool | What it returns |
+|---|---|
+| `engine_status` | worker heartbeat, LLM on/off, counts, queues |
+| `get_taxonomy` | every valid filter value + platforms + event types |
+| `list_stories` | filtered stories (`category`, `news_type`, `audience`, `region`, `tone`, `source_id`, `sort`) |
+| `search_stories` | keyword search over headlines, summaries, entities |
+| `get_story` | one story with all source articles |
+| `get_trending` | stories covered by 2+ outlets, most-covered first |
+| `upsert_profile` / `get_profile` | store a user's interests (id = the app's user id) |
+| `get_feed` | personalised ranked feed (with score breakdown) |
+| `record_event` | click / save / posted / dismiss / view: the feed learns |
+| `get_post_brief` | everything needed to write a LinkedIn / X / carousel / Reel / Story post |
+| `generate_post` | the engine writes the draft (only if it has an LLM key) |
+| `list_sources` / `get_source` | sources and their health |
+| `add_source` / `update_source` / `check_source_now` | manage sources (admin key) |
+| `list_recent_articles` / `list_runs` | raw discoveries and the engine's work log |
+
+## 3. REST quick reference
+
+All under `/v1`. Lists take repeated query params: `?category=AI&category=Fintech`.
+
+```
+GET    /v1/status                        engine health and counts
+GET    /v1/taxonomy                      valid filter values, platforms, event types
+GET    /v1/stories                       filters: category news_type audience region tone shelf_life
+                                         source_id q since_hours min_sources min_postability
+                                         sort=latest|trending|postability limit offset
+GET    /v1/stories/trending              ?hours=24
+GET    /v1/search?q=...                  keyword search
+GET    /v1/stories/{id}                  one story, all articles
+POST   /v1/stories/{id}/brief            {platform, profile_id | profile, angle?}
+POST   /v1/stories/{id}/generate         same body; needs engine LLM key
+PUT    /v1/profiles/{user_id}            {role, niche, goal, tone, categories[], audiences[], regions[], platforms[]}
+GET    /v1/profiles/{user_id}
+DELETE /v1/profiles/{user_id}
+GET    /v1/profiles/{user_id}/feed       ?category=&region=&since_hours=&limit=
+POST   /v1/feed                          {profile_id | profile, filters, since_hours, limit}
+POST   /v1/profiles/{user_id}/events     {story_id, type: view|click|save|posted|dismiss, platform?}
+GET    /v1/sources                       (admin for writes below)
+POST   /v1/sources                       {id, name, homepage | sitemap_url | rss_url | listing_url, ...}
+PATCH  /v1/sources/{id}
+DELETE /v1/sources/{id}
+POST   /v1/sources/{id}/ingest           fetch now, return what was found
+POST   /v1/sources/{id}/schedule         let the worker fetch it on the next tick
+GET    /v1/articles                      raw discovered articles
+GET    /v1/runs                          work log
+POST   /v1/webhooks                      {url, events[]}  -> returns secret once
+GET    /v1/webhooks | DELETE /v1/webhooks/{id} | POST /v1/webhooks/{id}/test | GET /v1/webhooks/deliveries
+POST   /v1/admin/cycle | /v1/admin/enrich | /v1/admin/tag | /v1/admin/retention
+GET    /health                           public; 200 if the worker heartbeat is fresh, else 503
+```
+
+## 4. The story object (what the app renders)
+
+```json
+{
+  "id": "a643f883d73f4785",            // stable forever: safe to store in the app's DB
+  "headline": "WhatsApp Rolls Out Message Scheduling Up To 14 Days In Advance",
+  "summary": "Engine-written summary (null until LLM tagging is on)",
+  "excerpt": "Publisher's own description, max 240 chars",
+  "published_at": "2026-11-25T16:57:51Z", "updated_at": "2026-11-26T05:45:02Z",
+  "source_count": 2, "article_count": 2, "sources": ["Inc42", "TechCrunch"],
+  "image": "https://...", "is_trending": false, "is_roundup": false,
+  "tag_status": "done",                // pending | rules | done | failed
+  "tags": {
+    "category": ["Social Media", "Big Tech"], "news_type": "Product launch",
+    "audience": ["Marketers", "Creators"], "region": ["Global"], "tone": "Positive",
+    "shelf_life": "This week", "entities": ["WhatsApp", "Meta"], "postability": 82,
+    "angles": ["Scheduling turns WhatsApp into a CRM-lite", "..."]
+  },
+  "links": [{"source": "TechCrunch", "source_id": "techcrunch", "url": "https://..."}],
+  "rank": {"relevance": 0.9, "freshness": 0.95, "trending": 1.0, "postability": 0.91, "score": 1.16}  // feeds only
+}
+```
+
+**Display rules (copyright):** show `headline`, `summary`, source names and link out via `links`.
+`excerpt` is publisher text: if shown, keep it short and attributed. The engine never returns article bodies.
+Posts written from briefs must add the user's own view and credit the sources listed in the brief.
+
+## 5. Webhooks
+
+Events: `story.created`, `story.tagged`, `story.trending` (fires once when a story reaches `TRENDING_SOURCE_COUNT` outlets).
+
+```
+POST <your url>
+X-Engine-Event: story.trending
+X-Engine-Signature: sha256=<hex HMAC-SHA256 of the raw body using the webhook secret>
+{"event": "story.trending", "delivery_id": 42, "sent_at": "...", "data": {"story_id": "...", "headline": "...", "source_count": 3}}
+```
+Verify the signature, return 2xx quickly. Failures retry with backoff up to 8 times.
+
+## 6. Recommended app flows
+
+1. **Onboarding:** `GET /v1/taxonomy` to build pickers, then `PUT /v1/profiles/{user_id}`.
+2. **Home feed:** `GET /v1/profiles/{user_id}/feed`. Show `rank` as "why you're seeing this" if useful.
+3. **Browse/filter:** `GET /v1/stories` with the user's chosen filters.
+4. **Create post:** `POST /v1/stories/{id}/brief` and send `system` + `prompt` to the app's LLM,
+   or `POST /v1/stories/{id}/generate` if the engine holds the LLM key.
+5. **Learn:** on click/save/post/dismiss call `POST /v1/profiles/{user_id}/events`.
+6. **Real-time:** subscribe a webhook to `story.trending` for "post about this now" nudges.
+
+## 7. Limits and behaviour to know
+
+- Stories cover the last ~72h by default (`since_hours` up to 720 for lists; `KEEP_STORY_DAYS`=30 retention).
+- Without an LLM key, tags come from keyword rules (`tag_status: "rules"`): good for filters, weaker on
+  audience/tone, and `summary`/`angles` are empty. Adding `ANTHROPIC_API_KEY` re-tags them automatically.
+- New sources: a homepage is enough; the engine finds the RSS feed and news sitemap itself.
+- One worker process per deployment. The API can scale horizontally.

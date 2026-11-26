@@ -1,0 +1,57 @@
+# Fixed label set. The tagger may ONLY use these values, so filters stay clean.
+# Edit freely: the tagger prompt, the API filters and the app all read from this file.
+
+category:
+  - Startups
+  - Funding
+  - AI
+  - Fintech
+  - Ecommerce
+  - Cybersecurity
+  - Deeptech
+  - Policy
+  - Leadership
+  - Big Tech
+  - Social Media
+  - Education
+  - Mobility
+  - Markets
+
+news_type:
+  - Funding round
+  - Product launch
+  - Leadership change
+  - Policy / regulation
+  - IPO / markets
+  - Data breach
+  - Analysis / opinion
+  - Market data
+  - Partnership / deal
+  - Government programme
+
+audience:
+  - Founders
+  - Investors
+  - Marketers
+  - Product & tech
+  - Creators
+  - Job seekers
+  - Students
+
+region:
+  - India
+  - Karnataka
+  - US
+  - Middle East
+  - Global
+
+tone:
+  - Positive
+  - Neutral
+  - Negative
+  - Controversial
+
+shelf_life:
+  - Breaking      # stale in 24-48h
+  - This week
+  - Evergreen     # still postable in a month
