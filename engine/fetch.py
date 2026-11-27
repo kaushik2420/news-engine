@@ -19,6 +19,7 @@ from . import settings as S
 
 log = logging.getLogger("engine.fetch")
 ROBOTS_TTL = 6 * 3600
+TOTAL_DEADLINE_SEC = 60          # whole request incl. slow-drip bodies; per-read timeouts alone don't bound this
 
 
 @dataclass
@@ -112,6 +113,14 @@ class Fetcher:
 
     # ---- fetch -------------------------------------------------------------------
     async def get(self, url: str, conditional: bool = False, retries: int = 2) -> Response:
+        try:
+            async with asyncio.timeout(TOTAL_DEADLINE_SEC * (retries + 1)):
+                return await self._get(url, conditional, retries)
+        except TimeoutError:
+            log.info("fetch gave up after %ss: %s", TOTAL_DEADLINE_SEC * (retries + 1), url)
+            return Response(url, 0)
+
+    async def _get(self, url: str, conditional: bool, retries: int) -> Response:
         if not url.startswith(("http://", "https://")):
             return Response(url, 0)
         if not await self.allowed(url):
@@ -127,7 +136,7 @@ class Fetcher:
         for attempt in range(retries + 1):
             await self._pace(url)
             try:
-                async with self.client.stream("GET", url, headers=headers) as r:
+                async with asyncio.timeout(TOTAL_DEADLINE_SEC), self.client.stream("GET", url, headers=headers) as r:
                     if r.status_code == 304:
                         return Response(url, 304, not_modified=True)
                     if r.status_code in (429, 500, 502, 503, 504) and attempt < retries:
@@ -147,9 +156,9 @@ class Fetcher:
                         self._save_validators(url, r.headers.get("ETag"), r.headers.get("Last-Modified"))
                     return Response(str(r.url), r.status_code, b"".join(chunks),
                                     content_type=r.headers.get("Content-Type", ""))
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, TimeoutError) as e:
                 if attempt == retries:
-                    log.info("fetch failed %s: %s", url, e)
+                    log.info("fetch failed %s: %s", url, repr(e))
                     return Response(url, 0)
                 await asyncio.sleep(2 ** (attempt + 1))
         return Response(url, 0)

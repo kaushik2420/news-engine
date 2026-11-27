@@ -96,3 +96,68 @@ def test_autodiscovery_tries_common_feed_paths_and_retries(engine_env):
     out = run(ingest.ingest_source(f2, "nolink"))
     assert out["discovered"]["rss_url"] == "https://nolink.example/feed" and out["rss"] == 3
     assert service.get_source("nolink")["consecutive_failures"] == 0
+
+
+def test_refused_sitemap_is_a_visible_failure_not_a_silent_zero(engine_env):
+    import httpx
+    from engine.fetch import Fetcher
+    from tests.fixtures_transport import transport
+
+    def refuse(req):
+        return httpx.Response(403) if "wall.example" in str(req.url) and "robots" not in str(req.url) else None
+    base = transport(extra={"https://half.example/feed": ("application/rss+xml", __import__("scripts.build_fixtures", fromlist=["rss"]).rss("h", [
+        {"title": "A story that is long enough", "link": "https://half.example/a", "date": "Thu, 26 Nov 2026 09:00:00 +0000", "summary": "s"}]))})
+
+    def handler(req):
+        return refuse(req) or base.handle_request(req)
+    f = Fetcher(transport=httpx.MockTransport(handler), per_domain_interval=0)
+    service.create_source({"id": "wall", "name": "Wall", "sitemap_url": "https://wall.example/news.xml", "autodiscover": False})
+    out = run(ingest.ingest_source(f, "wall"))
+    s = service.get_source("wall")
+    assert "403" in out["error"] and s["consecutive_failures"] == 1 and "refusing our crawler" in s["last_error"]
+    # one channel refused, the other works: not a failure, but the warning is kept
+    service.create_source({"id": "half", "name": "Half", "sitemap_url": "https://wall.example/news.xml",
+                           "rss_url": "https://half.example/feed", "autodiscover": False})
+    out = run(ingest.ingest_source(f, "half"))
+    assert out["rss"] == 1 and "403" in out["warnings"][0] and service.get_source("half")["consecutive_failures"] == 0
+
+
+def test_config_changes_apply_once_and_orphaned_runs_close(engine_env, tmp_path, monkeypatch):
+    from engine import settings
+    worker.seed_sources()
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "sources.yaml").write_text("""sources: []
+changes:
+  - {id: c1, source: inc42, set: {enabled: false, interval_min: 45}}
+""")
+    monkeypatch.setattr(settings.settings, "config_dir", cfg)
+    assert worker.apply_config_changes() == ["c1"]
+    assert service.get_source("inc42")["enabled"] is False and service.get_source("inc42")["interval_min"] == 45
+    service.update_source("inc42", {"enabled": True})       # a later API edit is never re-overwritten
+    assert worker.apply_config_changes() == [] and service.get_source("inc42")["enabled"] is True
+    with db.get_engine().begin() as c:
+        c.execute(db.runs.insert().values(kind="source", ref="npr", started_at=db.utcnow()))
+    assert worker.close_orphaned_runs() == 1
+    assert service.list_runs("source")[0]["detail"]["error"].startswith("interrupted")
+
+
+def test_slow_drip_server_cannot_hang_a_fetch(engine_env, monkeypatch):
+    import asyncio
+    import httpx
+    from engine import fetch as F
+
+    class Drip(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                await asyncio.sleep(0.05)
+                yield b"x"
+
+    async def handler(req):
+        if req.url.path == "/robots.txt":
+            return httpx.Response(404)
+        return httpx.Response(200, stream=Drip())
+    monkeypatch.setattr(F, "TOTAL_DEADLINE_SEC", 0.3)
+    f = F.Fetcher(transport=httpx.MockTransport(handler), per_domain_interval=0)
+    r = run(f.get("https://slow.example/sitemap.xml", retries=0))
+    assert r.status == 0 and not r.ok

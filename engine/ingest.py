@@ -91,15 +91,38 @@ async def autodiscover(fetcher: Fetcher, src) -> dict:
     return found
 
 
+class ChannelError(RuntimeError):
+    pass
+
+
+def _failure(r) -> str | None:
+    """Why a feed/sitemap fetch is unusable, or None. 304 (unchanged) is fine."""
+    if r.not_modified or r.ok:
+        return None
+    if r.status == 451:
+        return "blocked by the site's robots.txt"
+    if r.status in (401, 403, 429):
+        return f"HTTP {r.status} (the site is refusing our crawler)"
+    return f"HTTP {r.status}" if r.status else "no response (timeout or connection error)"
+
+
 async def collect_sitemap(fetcher: Fetcher, url: str, depth: int = 0) -> list[Candidate]:
     r = await fetcher.get(url, conditional=True)
-    if r.not_modified or not r.ok:
+    why = _failure(r)
+    if why:
+        raise ChannelError(f"sitemap {url}: {why}")
+    if r.not_modified:
         return []
     kind, items = parse_sitemap(r.content)
+    if kind == "invalid":
+        raise ChannelError(f"sitemap {url}: not a valid sitemap")
     if kind == "index" and depth == 0:
         out = []
         for child in rank_sitemap_children(items, limit=2):
-            out += await collect_sitemap(fetcher, child, depth + 1)
+            try:
+                out += await collect_sitemap(fetcher, child, depth + 1)
+            except ChannelError:
+                continue        # one broken child shouldn't sink the index
         return out
     return items if kind == "urlset" else []
 
@@ -195,8 +218,13 @@ async def ingest_source(fetcher: Fetcher, source_id: str) -> dict:
                     src = c.execute(select(db.sources).where(db.sources.c.id == source_id)).first()
 
             cands: list[Candidate] = []
+            channel_errors: list[str] = []
             if src.sitemap_url:
-                got = await collect_sitemap(fetcher, src.sitemap_url)
+                try:
+                    got = await collect_sitemap(fetcher, src.sitemap_url)
+                except ChannelError as e:
+                    channel_errors.append(str(e))
+                    got = []
                 if src.link_pattern and not any(g.title for g in got):
                     import re
                     rx = re.compile(src.link_pattern)
@@ -209,6 +237,8 @@ async def ingest_source(fetcher: Fetcher, source_id: str) -> dict:
                     got = from_rss(r.content)
                     stats["rss"] = len(got)
                     cands += got
+                elif _failure(r):
+                    channel_errors.append(f"rss {src.rss_url}: {_failure(r)}")
             if src.listing_url and src.link_pattern:
                 r = await fetcher.get(src.listing_url)
                 if r.ok:
@@ -217,6 +247,11 @@ async def ingest_source(fetcher: Fetcher, source_id: str) -> dict:
                     cands += got
             if not (src.sitemap_url or src.rss_url or src.listing_url):
                 raise RuntimeError("no discovery channel: set rss_url, sitemap_url, listing_url or a homepage to auto-discover")
+            channels = sum(bool(x) for x in (src.sitemap_url, src.rss_url, src.listing_url and src.link_pattern))
+            if channel_errors and len(channel_errors) >= channels:
+                raise RuntimeError("; ".join(channel_errors))          # every channel failed: count as a failure
+            if channel_errors:
+                stats["warnings"] = channel_errors                    # one channel failed, another worked
 
             with db.get_engine().begin() as c:
                 new, ready = upsert_candidates(c, src, cands)
@@ -294,8 +329,8 @@ def _story_context(c, sid: str) -> dict:
 
 
 async def tag_pending(limit: int | None = None) -> dict:
-    limit = limit or S.settings.tag_batch
     use_llm = llm.available()
+    limit = limit or (S.settings.tag_batch if use_llm else 250)     # rule tagging is instant
     statuses = ["pending", "rules"] if use_llm else ["pending"]
     with db.get_engine().connect() as c:
         rows = c.execute(select(db.stories.c.id, db.stories.c.headline, db.stories.c.summary, db.stories.c.source_count,

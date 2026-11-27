@@ -24,6 +24,7 @@ from .fetch import Fetcher
 
 log = logging.getLogger("engine.worker")
 LEASE_MIN = 10
+SOURCE_DEADLINE_SEC = 300        # one source can never hold up a cycle for longer than this
 
 
 def seed_sources() -> int:
@@ -46,6 +47,43 @@ def seed_sources() -> int:
                 autodiscover=s.get("autodiscover", True), next_check_at=db.utcnow(), created_at=db.utcnow()))
             added += 1
     return added
+
+
+def apply_config_changes() -> list[str]:
+    """One-off source changes from config/sources.yaml `changes:` (each applied once, tracked by its id).
+
+    Lets operators fix or retire live sources through a deploy, without the admin API.
+    """
+    path = S.settings.config_dir / "sources.yaml"
+    if not path.exists():
+        return []
+    changes = yaml.safe_load(path.read_text()).get("changes") or []
+    done, _ = db.get_state("config_changes_applied", [])
+    done = list(done or [])
+    applied = []
+    allowed = {c.name for c in db.sources.columns} - {"id", "created_at"}
+    for ch in changes:
+        cid, sid = ch.get("id"), ch.get("source")
+        if not cid or cid in done:
+            continue
+        values = {k: v for k, v in (ch.get("set") or {}).items() if k in allowed}
+        if values:
+            values.setdefault("next_check_at", db.utcnow())
+            values.setdefault("consecutive_failures", 0)
+            with db.get_engine().begin() as c:
+                c.execute(db.sources.update().where(db.sources.c.id == sid).values(**values))
+        done.append(cid)
+        applied.append(cid)
+    if applied:
+        db.set_state("config_changes_applied", done)
+    return applied
+
+
+def close_orphaned_runs() -> int:
+    """Runs left open by a process that was stopped (e.g. during a deploy) are marked interrupted."""
+    with db.get_engine().begin() as c:
+        return c.execute(db.runs.update().where(db.runs.c.finished_at.is_(None)).values(
+            finished_at=db.utcnow(), ok=False, detail={"error": "interrupted (worker restarted)"})).rowcount
 
 
 def claim_due(limit: int) -> list[str]:
@@ -74,7 +112,11 @@ async def cycle(fetcher: Fetcher, force_all: bool = False) -> dict:
 
     async def run(sid):
         async with sem:
-            return await ingest.ingest_source(fetcher, sid)
+            try:
+                return await asyncio.wait_for(ingest.ingest_source(fetcher, sid), SOURCE_DEADLINE_SEC)
+            except asyncio.TimeoutError:
+                log.warning("source %s took over %ss; abandoned this round", sid, SOURCE_DEADLINE_SEC)
+                return {"source": sid, "error": f"timed out after {SOURCE_DEADLINE_SEC}s"}
 
     results = await asyncio.gather(*(run(s) for s in due), return_exceptions=True)
     report = {"sources": [r if isinstance(r, dict) else {"error": repr(r)} for r in results]}
@@ -100,7 +142,8 @@ async def run_forever(fetcher: Fetcher) -> None:
             loop.add_signal_handler(sig, stop.set)
         except NotImplementedError:
             pass
-    log.info("worker started; seeded %d sources", seed_sources())
+    log.info("worker started; seeded %d sources, applied config changes %s, closed %d interrupted runs",
+             seed_sources(), apply_config_changes(), close_orphaned_runs())
     ticks = 0
     while not stop.is_set():
         ticks += 1
@@ -141,6 +184,7 @@ def main() -> None:
     fetcher = fixture_fetcher() if a.fixtures else Fetcher()
     if a.once:
         seed_sources()
+        apply_config_changes()
         report = asyncio.run(cycle(fetcher, force_all=True))
         for s in report["sources"]:
             log.info("%s", s)

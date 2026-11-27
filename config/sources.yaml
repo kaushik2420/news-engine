@@ -92,14 +92,6 @@ sources:
     default_category: Business
     interval_min: 15
 
-  - id: sportskeeda
-    name: Sportskeeda
-    homepage: https://www.sportskeeda.com/
-    sitemap_url: https://www.sportskeeda.com/news-sitemap.xml
-    region: Global
-    default_category: Sports
-    interval_min: 20
-
   # ---- General sitemaps only: homepage given, the engine finds RSS + sitemap itself ----
   - id: cbs-news
     name: CBS News
@@ -118,6 +110,8 @@ sources:
   - id: abc-australia
     name: ABC News (Australia)
     homepage: https://www.abc.net.au/news
+    rss_url: https://www.abc.net.au/news/feed/51120/rss.xml   # its sitemaps are stale (last updated Jul 2026)
+    autodiscover: false
     region: Australia
     default_category: World
     interval_min: 20
@@ -137,9 +131,19 @@ sources:
     interval_min: 30
 
   # Not added: blocked to our checks (BBC, Guardian, AP, Reuters-class outlets, The Hindu, HT, Indian Express, NDTV,
-  # DW, CNA, Independent, Livemint, Moneycontrol, Firstpost, IGN, The Conversation, France24), paid bot access via
+  # DW, CNA, Independent, Livemint, Moneycontrol, Firstpost, IGN, The Conversation, France24, Sportskeeda), paid bot access via
   # TollBit (Variety, Deadline), or articles closed to AI crawlers (phys.org, medicalxpress).
 
   # Add more by homepage alone; the engine discovers the rest. Examples to evaluate:
   # - {id: entrackr, name: Entrackr, homepage: https://entrackr.com/, region: India, default_category: Startups}
   # - {id: moneycontrol-startups, name: Moneycontrol, homepage: https://www.moneycontrol.com/, region: India, default_category: Markets}
+
+# One-off changes to sources already in the database, applied once each on worker start (tracked by id).
+# Use for operational fixes without the admin API. Keys: any source field (rss_url, sitemap_url, enabled, ...).
+changes:
+  - id: 2026-11-27-retire-sportskeeda
+    source: sportskeeda
+    set: {enabled: false}           # its sitemap refuses robots-respecting fetchers
+  - id: 2026-11-27-abc-rss
+    source: abc-australia
+    set: {rss_url: "https://www.abc.net.au/news/feed/51120/rss.xml", sitemap_url: null, autodiscover: false}
