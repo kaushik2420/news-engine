@@ -21,7 +21,9 @@ MAX_STORY_TOKENS = 250
 MIN_CORPUS = 300
 MIN_SHARED = 3
 ROUNDUP = re.compile(r"(&|and) more\b|\bdaily brief\b|\btop (\d+ )?(stories|news)\b|\bround-?up\b|\bnewsletter\b|"
-                     r"\bthis week in\b|\bweekly (wrap|recap)\b|\bfunding (galore|this week)\b|\bmorning brief\b", re.I)
+                     r"\bthis week in\b|\bweekly (wrap|recap)\b|\bfunding (galore|this week)\b|\bmorning brief\b|"
+                     r"\b(\d+|three|five|seven|ten|top) (highlights|things|stories|takeaways)\b|"
+                     r"\bwhat you need to know\b|\bnews in brief\b|\blive updates?\b", re.I)
 
 
 def is_roundup(title: str) -> bool:

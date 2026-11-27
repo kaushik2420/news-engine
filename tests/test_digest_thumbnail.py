@@ -159,3 +159,16 @@ def test_every_category_renders(engine_env):
                                 "so that fitting and ellipsis are exercised properly", "tags": {"category": [cat],
                                 "region": ["India"]}, "source_count": 3, "sources": ["A", "B", "C", "D"]}, "square")
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_sensitive_stories_get_a_sober_card():
+    from engine import thumbnail
+    assert thumbnail.is_sensitive({"category": ["Entertainment", "Crime & Justice"]})
+    assert thumbnail.is_sensitive({"category": ["World"], "news_type": "Disaster / emergency"})
+    assert thumbnail.is_sensitive({"category": ["World"], "tone": "Negative"})
+    assert not thumbnail.is_sensitive({"category": ["Sports"], "tone": "Positive"})
+    a = thumbnail.render({"id": "x", "headline": "Actor to stand trial", "source_count": 6, "sources": ["A"],
+                          "tags": {"category": ["Entertainment", "Crime & Justice"]}}, "wide")
+    b = thumbnail.render({"id": "x", "headline": "Actor to stand trial", "source_count": 6, "sources": ["A"],
+                          "tags": {"category": ["Entertainment"]}}, "wide")
+    assert a != b

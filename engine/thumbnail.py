@@ -35,7 +35,16 @@ PALETTES = {
     "entertainment": ("#2E0A2A", "#56164E", "#FF8AD8", "#330B2F"),
     "justice":       ("#1A1A1A", "#33302A", "#F5C451", "#26221A"),
     "education":     ("#16163D", "#2A2A6B", "#A9B4FF", "#16163D"),
+    "sober":         ("#1B2229", "#2A333C", "#C7D0D9", "#1B2229"),   # deaths, crime, conflict, disasters
 }
+SENSITIVE_CATEGORIES = {"Crime & Justice"}
+SENSITIVE_TYPES = {"Disaster / emergency", "Conflict"}
+
+
+def is_sensitive(tags: dict) -> bool:
+    """Serious stories get a quiet card: no playful motif, no TRENDING badge."""
+    return (bool(SENSITIVE_CATEGORIES & set(tags.get("category") or []))
+            or tags.get("news_type") in SENSITIVE_TYPES or tags.get("tone") == "Negative")
 GROUP = {
     "World": "world", "Politics": "politics", "Policy": "politics", "Leadership": "politics",
     "Business": "business", "Economy": "business", "Markets": "business", "Funding": "business",
@@ -71,7 +80,11 @@ def _motif(group: str, d: ImageDraw.ImageDraw, box: tuple, rnd: random.Random, a
     w, h = x1 - x0, y1 - y0
     cx, cy = x0 + w * rnd.uniform(0.45, 0.6), y0 + h * rnd.uniform(0.4, 0.6)
     A = lambda a: _hex(accent, a)  # noqa: E731
-    if group == "world":                                         # globe: rings + meridians
+    if group == "sober":                                         # quiet horizontal rules
+        for i in range(9):
+            yy = y0 + h * (0.12 + i * 0.09)
+            d.line([(x0 + w * rnd.uniform(0.05, 0.3), yy), (x1 - w * 0.05, yy)], fill=A(40 + (i % 3) * 15), width=2)
+    elif group == "world":                                         # globe: rings + meridians
         r = min(w, h) * rnd.uniform(0.42, 0.5)
         for i in range(6):
             rr = r * (1 - i * 0.14)
@@ -242,7 +255,8 @@ def render(story: dict, size: str = "wide") -> bytes:
     W, H = SIZES[size]
     tags = story.get("tags") or {}
     cats = tags.get("category") or ["World"]
-    group = GROUP.get(cats[0], "world")
+    sensitive = is_sensitive(tags)
+    group = "sober" if sensitive else GROUP.get(cats[0], "world")
     bg1, bg2, accent, pill_fg = PALETTES[group]
     seed = int(hashlib.sha1(f"{story['id']}:{VERSION}".encode()).hexdigest()[:12], 16)
     rnd = random.Random(seed)
@@ -273,7 +287,7 @@ def render(story: dict, size: str = "wide") -> bytes:
     if size == "wide":
         m = 64
         x_after = _pill(d, (m, m), cats[0].upper(), accent, pill_fg, 24)
-        if n >= S.settings.trending_source_count:
+        if n >= S.settings.trending_source_count and not sensitive:
             _pill(d, (x_after + 14, m), "TRENDING", "#FFFFFF", bg1, 24)
         f, lines = _fit(title, int(W * 0.56) - m, 4, range(62, 35, -2))
         lh = int(f.size * 1.12)
@@ -285,7 +299,7 @@ def render(story: dict, size: str = "wide") -> bytes:
         m = 72
         top_text = int(H * 0.52)
         x_after = _pill(d, (m, top_text - 70), cats[0].upper(), accent, pill_fg, 28)
-        if n >= S.settings.trending_source_count:
+        if n >= S.settings.trending_source_count and not sensitive:
             _pill(d, (x_after + 14, top_text - 70), "TRENDING", "#FFFFFF", bg1, 28)
         f, lines = _fit(title, W - 2 * m, 5, range(76, 43, -2))
         lh = int(f.size * 1.12)
@@ -308,6 +322,7 @@ def render(story: dict, size: str = "wide") -> bytes:
 
 
 def etag(story: dict, size: str) -> str:
+    t = story.get("tags") or {}
     key = f"{story['id']}|{size}|{VERSION}|{story.get('card_title') or story.get('headline')}|" \
-          f"{story.get('source_count')}|{(story.get('tags') or {}).get('category')}|{os.getenv('BRAND_NAME', '')}"
+          f"{story.get('source_count')}|{t.get('category')}|{t.get('tone')}|{t.get('news_type')}|{os.getenv('BRAND_NAME', '')}"
     return '"' + hashlib.sha1(key.encode()).hexdigest()[:20] + '"'
