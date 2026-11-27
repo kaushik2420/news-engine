@@ -15,4 +15,7 @@ Claude integrate via INTEGRATION.md, which is a contract: keep it accurate when 
 - Taxonomy values come only from `config/taxonomy.yaml`; `tagger.validate()` drops anything else.
 - Timestamps are naive UTC (`db.utcnow()`); API output uses `db.iso()` (Z-suffixed).
 - Run `pytest -q` before committing; tests run offline against `tests/fixtures_transport.py`.
+- Before a deploy, also run the suite in a fresh venv built only from `requirements.txt`
+  (`python -m venv /tmp/v && /tmp/v/bin/pip install -r requirements.txt && /tmp/v/bin/python -m pytest -q`).
+  A library installed globally on your machine but missing from requirements.txt crashes the deploy.
   Add fixture routes there rather than hitting the network in tests.
