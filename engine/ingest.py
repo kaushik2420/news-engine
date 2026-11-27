@@ -330,22 +330,31 @@ def _story_context(c, sid: str) -> dict:
 
 
 async def tag_pending(limit: int | None = None) -> dict:
-    use_llm = llm.available()
+    # While the AI account is paused (no credits, bad key), new stories still get rule tags so they show up,
+    # and nobody's attempts are used up; the LLM re-tags "rules" stories once it's back.
+    use_llm = llm.available() and not llm.paused()
     limit = limit or (S.settings.tag_batch if use_llm else 250)     # rule tagging is instant
     statuses = ["pending", "rules"] if use_llm else ["pending"]
     with db.get_engine().connect() as c:
         rows = c.execute(select(db.stories.c.id, db.stories.c.headline, db.stories.c.summary, db.stories.c.source_count,
-                                db.stories.c.tag_attempts, db.stories.c.tags)
+                                db.stories.c.tag_attempts, db.stories.c.tags, db.stories.c.tag_status)
                          .where(db.stories.c.tag_status.in_(statuses), db.stories.c.tag_attempts < 3)
                          .order_by(db.stories.c.updated_at.desc()).limit(limit)).all()
     out = {"tagged": 0, "rules": 0, "failed": 0, "mode": "llm" if use_llm else "rules"}
     for r in rows:
+        if not use_llm and r.tag_status == "rules":
+            continue                                   # paused mid-batch: leave rule-tagged stories for later
         with db.get_engine().connect() as c:
             ctx = _story_context(c, r.id)
-        status, tags = "done", None
+        status, tags, counted = "done", None, True
         if use_llm:
             try:
                 tags = await asyncio.to_thread(tagger.llm_tag, r.headline, r.summary or "", ctx["sources"], ctx["text"], ctx["fallback"])
+            except llm.LLMPaused as e:
+                log.warning("AI tagging paused: %s", e)
+                use_llm, counted, out["mode"] = False, False, "paused"
+                if r.tag_status == "rules":
+                    continue
             except Exception as e:
                 log.warning("LLM tagging failed for %s: %s", r.id, e)
                 status = "pending" if r.tag_attempts < 2 else "failed"
@@ -353,7 +362,7 @@ async def tag_pending(limit: int | None = None) -> dict:
             tags = tagger.rules_tag(r.headline, r.summary or "", ctx["regions"], r.source_count, ctx["fallback"])
             status = "rules" if not use_llm else "failed"
         with db.get_engine().begin() as c:
-            values = {"tag_attempts": r.tag_attempts + 1, "tag_status": status}
+            values = {"tag_attempts": r.tag_attempts + (1 if counted else 0), "tag_status": status}
             if tags:
                 if (r.tags or {}).get("is_roundup"):
                     tags = {**tags, "is_roundup": True}      # structural flags survive re-tagging

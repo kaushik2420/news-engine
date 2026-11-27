@@ -18,7 +18,9 @@ def engine_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PER_DOMAIN_INTERVAL_SEC", "0")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     from engine import db, runtime, settings, tagger
-    monkeypatch.setattr(db, "utcnow", lambda: FROZEN_NOW)     # fixture headlines are from 25-26 Nov 2026
+    monkeypatch.setattr(db, "utcnow", lambda: FROZEN_NOW)
+    from engine import llm as _llm
+    _llm._pause.update(until=None, reason=None, checked=0.0)     # AI pause is process-wide; start each test clean     # fixture headlines are from 25-26 Nov 2026
     settings.reload()
     db.reset_engine()
     if os.getenv("TEST_DATABASE_URL"):

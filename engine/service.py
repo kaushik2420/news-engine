@@ -232,11 +232,32 @@ def trending(hours: int = 24, limit: int = 20, **filters) -> dict:
     return list_stories(since_hours=hours, min_sources=2, sort="trending", limit=limit, **filters)
 
 
+def digest_reason(status: str, story: dict | None = None) -> str | None:
+    """Plain-English reason a digest is missing, so callers (and their Claude) don't guess."""
+    if status in ("ready", "updating"):
+        return None
+    if not llm.available():
+        return ("Digests are switched off: the engine has no ANTHROPIC_API_KEY. Set it on both Render services "
+                "(news-engine-api and news-engine-worker) and redeploy.")
+    why = llm.paused()
+    if why:
+        return f"Digests are paused because {why}. The engine retries by itself every {llm.PAUSE_MINUTES} minutes."
+    if status == "unavailable":
+        err = ((story or {}).get("_digest_error")) or "no usable article text"
+        return f"No digest for this story: {err}. Show the source links instead."
+    return "Not written yet. Request it again with generate=true, or wait for the background writer."
+
+
 def get_digest(story_id: str) -> dict:
     s = get_story(story_id)
-    return {"story_id": story_id, "status": s["digest_status"], "headline": s["headline"],
-            "card_title": s["card_title"], "digest": s.get("digest"), "links": s["links"],
-            "thumbnail": s["thumbnail"]}
+    with db.get_engine().connect() as c:
+        raw = c.execute(select(db.stories.c.digest).where(db.stories.c.id == story_id)).scalar()
+    err = raw.get("error") if isinstance(raw, dict) else None
+    return {"story_id": story_id, "status": s["digest_status"],
+            "reason": digest_reason(s["digest_status"], {"_digest_error": err}), "llm_enabled": llm.available(),
+            "llm_paused": llm.paused(),
+            "headline": s["headline"], "card_title": s["card_title"], "digest": s.get("digest"),
+            "links": s["links"], "thumbnail": s["thumbnail"]}
 
 
 def story_for_thumbnail(story_id: str) -> dict:
@@ -532,6 +553,15 @@ def list_runs(kind: str | None = None, limit: int = 50) -> list[dict]:
     with db.get_engine().connect() as c:
         return [{"id": r.id, "kind": r.kind, "ref": r.ref, "started_at": db.iso(r.started_at),
                  "finished_at": db.iso(r.finished_at), "ok": r.ok, "detail": r.detail} for r in c.execute(q).all()]
+
+
+def requeue_failed_tags() -> dict:
+    """Give every story whose AI tagging gave up ("failed") a fresh set of AI attempts. They keep their rule
+    tags (and stay in feeds) until the AI re-tags them; IDs and clusters are untouched."""
+    with db.get_engine().begin() as c:
+        n = c.execute(db.stories.update().where(db.stories.c.tag_status == "failed")
+                      .values(tag_status="rules", tag_attempts=0)).rowcount
+    return {"requeued": n}
 
 
 def retag_story(story_id: str) -> dict:

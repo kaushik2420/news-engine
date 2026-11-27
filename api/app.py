@@ -160,7 +160,10 @@ def root():
 def health():
     s = service.status()
     ok = s["worker"]["alive"]
-    return JSONResponse({"ok": ok, "worker_alive": ok, "last_heartbeat": s["worker"]["last_heartbeat"]},
+    # booleans only: says whether each process sees an AI key, never anything about the key itself
+    return JSONResponse({"ok": ok, "worker_alive": ok, "last_heartbeat": s["worker"]["last_heartbeat"],
+                         "api_llm_enabled": llm.available(), "worker_llm_enabled": s["worker"].get("llm_enabled"),
+                         "llm_paused": llm.paused()},
                         status_code=200 if ok else 503)
 
 
@@ -214,8 +217,8 @@ def get_story(story_id: str):
 async def get_digest(story_id: str, generate: bool = True):
     """The engine-written 250-500 word account. Generated now if missing (takes ~10-30s) when generate=true."""
     current = service.get_digest(story_id)
-    if generate and current["status"] in ("not_ready", "updating") and llm.available():
-        await digest.generate(runtime.get_fetcher(), story_id)
+    if generate and current["status"] in ("not_ready", "updating"):
+        await digest.generate_on_demand(runtime.get_fetcher(), story_id)
         current = service.get_digest(story_id)
     return current
 
@@ -256,6 +259,12 @@ def generate(story_id: str, body: BriefIn):
 @router.get("/v1/platforms", tags=["posts"])
 def platforms():
     return {k: v["label"] for k, v in FORMATS.items()}
+
+
+@router.post("/v1/admin/requeue-failed-tags", tags=["admin"], dependencies=[Depends(admin)])
+def requeue_failed_tags():
+    """Give stories whose AI tagging gave up a fresh set of attempts (e.g. after topping up API credits)."""
+    return service.requeue_failed_tags()
 
 
 @router.post("/v1/stories/{story_id}/retag", tags=["admin"], dependencies=[Depends(admin)])

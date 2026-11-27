@@ -4,7 +4,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from engine import db, digest, llm, service
 from tests.conftest import ADMIN, READ, full_cycle, run
@@ -172,3 +172,84 @@ def test_sensitive_stories_get_a_sober_card():
     b = thumbnail.render({"id": "x", "headline": "Actor to stand trial", "source_count": 6, "sources": ["A"],
                           "tags": {"category": ["Entertainment"]}}, "wide")
     assert a != b
+
+
+def test_missing_digest_explains_why(engine_env):
+    full_cycle(engine_env["fetcher"])
+    sid = whatsapp_id()
+    r = service.get_digest(sid)
+    assert r["status"] == "not_ready" and r["llm_enabled"] is False and "ANTHROPIC_API_KEY" in r["reason"]
+    from api.app import create_app
+    with TestClient(create_app()) as c:
+        h = c.get("/health").json()
+        assert h["api_llm_enabled"] is False and "worker_llm_enabled" in h
+
+
+class _BillingError(Exception):
+    status_code = 400
+
+
+def _out_of_credits(*a, **k):
+    e = _BillingError("Error code: 400 - Your credit balance is too low to access the Anthropic API.")
+    why = llm.account_problem(e)
+    llm.pause(why)
+    raise llm.LLMPaused(why)
+
+
+def test_account_errors_are_recognised():
+    assert "credits" in llm.account_problem(_BillingError("Your credit balance is too low"))
+    e = Exception("bad key"); e.status_code = 401
+    assert "rejected" in llm.account_problem(e)
+    e = Exception("overloaded"); e.status_code = 529
+    assert llm.account_problem(e) is None                       # ordinary errors still count as a failed try
+
+
+def test_out_of_credits_pauses_ai_instead_of_failing_stories(engine_env, monkeypatch):
+    from engine import ingest, tagger
+    full_cycle(engine_env["fetcher"])                          # no key: everything rule-tagged
+    with db.get_engine().connect() as c:
+        before = dict(c.execute(select(db.stories.c.id, db.stories.c.tag_attempts)).all())
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(tagger, "llm_tag", _out_of_credits)
+    out = run(ingest.tag_pending())
+    assert out["mode"] == "paused" and out["failed"] == 0
+    with db.get_engine().connect() as c:
+        rows = c.execute(select(db.stories.c.id, db.stories.c.tag_status, db.stories.c.tag_attempts)).all()
+    assert {r.tag_status for r in rows} == {"rules"}
+    assert all(r.tag_attempts == before[r.id] for r in rows)    # nobody's attempts used up
+    assert run(ingest.tag_pending())["mode"] == "rules"         # stays paused, no AI calls
+    sid = whatsapp_id()
+    monkeypatch.setattr(llm, "complete_json", _out_of_credits)
+    assert run(digest.digest_pending(engine_env["fetcher"]))["mode"] == "paused"
+    r = service.get_digest(sid)
+    assert r["digest"] is None and "credits" in r["reason"] and r["llm_paused"]
+
+
+def test_paused_digest_puts_story_back(engine_env, monkeypatch):
+    full_cycle(engine_env["fetcher"])
+    sid = whatsapp_id()
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "complete_json", _out_of_credits)
+    with pytest.raises(llm.LLMPaused):
+        run(digest.generate(engine_env["fetcher"], sid))
+    with db.get_engine().connect() as c:
+        st = c.execute(select(db.stories.c.digest_status, db.stories.c.digest_attempts).where(db.stories.c.id == sid)).first()
+    assert st.digest_status is None and not st.digest_attempts
+    run(digest.generate_on_demand(engine_env["fetcher"], sid))  # on-demand never raises; reason explains
+    assert "paused" in service.get_digest(sid)["reason"]
+
+
+def test_failed_stories_can_be_requeued_once(engine_env):
+    from engine import worker
+    full_cycle(engine_env["fetcher"])
+    with db.get_engine().begin() as c:
+        c.execute(db.stories.update().values(tag_status="failed", tag_attempts=3))
+        total = c.execute(select(func.count()).select_from(db.stories)).scalar()
+    assert worker.apply_one_off_requeues() == total
+    assert worker.apply_one_off_requeues() == 0                 # one-off: never runs twice
+    with db.get_engine().connect() as c:
+        assert {tuple(r) for r in c.execute(select(db.stories.c.tag_status, db.stories.c.tag_attempts)).all()} == {("rules", 0)}
+    from api.app import create_app
+    with TestClient(create_app()) as cl:
+        assert cl.post("/v1/admin/requeue-failed-tags", headers=R).status_code == 403
+        assert cl.post("/v1/admin/requeue-failed-tags", headers=A).json() == {"requeued": 0}

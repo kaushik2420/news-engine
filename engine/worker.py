@@ -81,6 +81,22 @@ def apply_config_changes() -> list[str]:
     return applied
 
 
+ONE_OFF_REQUEUES = ["2026-11-27-requeue-after-credits"]   # stories that failed while the AI account had no credits
+
+
+def apply_one_off_requeues() -> int:
+    from . import service
+    done, _ = db.get_state("one_off_requeues", [])
+    done, total = list(done or []), 0
+    for rid in ONE_OFF_REQUEUES:
+        if rid not in done:
+            total += service.requeue_failed_tags()["requeued"]
+            done.append(rid)
+            db.set_state("one_off_requeues", done)
+            log.info("one-off %s: requeued %d stories for AI tagging", rid, total)
+    return total
+
+
 def close_orphaned_runs() -> int:
     """Runs left open by a process that was stopped (e.g. during a deploy) are marked interrupted."""
     with db.get_engine().begin() as c:
@@ -260,7 +276,9 @@ class Worker:
         return False
 
     async def _heartbeat(self) -> bool:
+        from . import llm
         db.set_state("worker", {"status": "running", "since": db.iso(self.started_at), "last_tick_at": db.iso(db.utcnow()),
+                                "llm_enabled": llm.available(), "llm_paused": llm.paused(),
                                 "checking_now": sorted(self.running), **self.stats})
         return False
 
@@ -271,8 +289,9 @@ class Worker:
                 loop.add_signal_handler(sig, self.stop.set)
             except NotImplementedError:
                 pass
-        log.info("worker started; seeded %d sources, applied config changes %s, closed %d interrupted runs",
-                 seed_sources(), apply_config_changes(), close_orphaned_runs())
+        log.info("worker started; seeded %d sources, applied config changes %s, closed %d interrupted runs, "
+                 "requeued %d stories", seed_sources(), apply_config_changes(), close_orphaned_runs(),
+                 apply_one_off_requeues())
         tick = S.settings.tick_seconds
         loops = [
             self._guard("heartbeat", self._heartbeat, idle=15),

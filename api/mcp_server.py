@@ -77,12 +77,13 @@ async def get_story(story_id: str) -> dict:
 
 @mcp.tool(description="The engine-written digest of a story (250-500 words, synthesised from every outlet, with "
                       "card_title, dek, key_points and source links) plus its thumbnail URLs. Generates it now if "
-                      "missing (10-30s) unless generate=false.")
+                      "missing (10-30s) unless generate=false. If digest is null, `reason` says why in plain words "
+                      "(e.g. not written yet, AI paused for billing) - show it or fall back to the source links.")
 async def get_story_digest(story_id: str, generate: bool = True) -> dict:
     try:
         current = await anyio.to_thread.run_sync(service.get_digest, story_id)
-        if generate and current["status"] in ("not_ready", "updating") and llm.available():
-            await digest.generate(runtime.get_fetcher(), story_id)
+        if generate and current["status"] in ("not_ready", "updating"):
+            await digest.generate_on_demand(runtime.get_fetcher(), story_id)
             current = await anyio.to_thread.run_sync(service.get_digest, story_id)
         return current
     except service.NotFound as e:
@@ -193,6 +194,16 @@ async def update_source(source_id: str, changes: dict) -> dict:
         require_admin()
         return service.update_source(source_id, changes)
     return await _run(go)
+
+
+@mcp.tool(description="Admin: give stories whose AI tagging gave up a fresh set of attempts (e.g. after the engine's "
+                      "Anthropic account was topped up). Returns how many were requeued.")
+async def requeue_failed_tags() -> dict:
+    try:
+        require_admin()
+        return await _run(service.requeue_failed_tags)
+    except PermissionError as e:
+        return {"error": str(e)}
 
 
 @mcp.tool(description="Fetch a source right now and return what was found (admin). Useful right after add_source.")

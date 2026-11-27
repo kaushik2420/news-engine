@@ -61,6 +61,7 @@ Or commit a `.mcp.json` (keep the key in an env var, not in git):
 | `check_sitemap` | dry run: can the engine use this sitemap? (admin key) |
 | `add_sitemap` | add a news site from its sitemap URL and ingest it immediately (admin key) |
 | `add_source` / `update_source` / `check_source_now` | manage sources (admin key) |
+| `requeue_failed_tags` | give stories whose AI tagging gave up a fresh set of attempts (admin key) |
 | `list_recent_articles` / `list_runs` | raw discoveries and the engine's work log |
 
 ## 3. REST quick reference
@@ -101,7 +102,10 @@ GET    /v1/runs                          work log
 POST   /v1/webhooks                      {url, events[]}  -> returns secret once
 GET    /v1/webhooks | DELETE /v1/webhooks/{id} | POST /v1/webhooks/{id}/test | GET /v1/webhooks/deliveries
 POST   /v1/admin/cycle | /v1/admin/enrich | /v1/admin/tag | /v1/admin/retention
-GET    /health                           public; 200 if the worker heartbeat is fresh, else 503
+POST   /v1/admin/requeue-failed-tags     stories whose AI tagging gave up get fresh attempts -> {requeued}
+GET    /health                           public; 200 if the worker heartbeat is fresh, else 503. Also
+                                         api_llm_enabled / worker_llm_enabled (true/false: does each service
+                                         see an AI key) and llm_paused (null, or why AI calls are paused)
 ```
 
 ## 3b. Adding a news site by its sitemap
@@ -134,9 +138,13 @@ words from the full text of every outlet covering it, with each claim attributed
 - `story.digest_status`: `ready` | `updating` (a new outlet joined; the old digest is still served) |
   `not_ready` | `unavailable` (no usable text, or it kept quoting the source)
 - `story.card_title` and `story.dek`: a punchy title and one-line standfirst for the card (once ready)
-- `GET /v1/stories/{id}/digest` returns `{status, card_title, digest: {card_title, dek, body, key_points,
-  word_count, sources, kind, material, model, generated_at}, links, thumbnail}`. If it is not ready yet
-  and the engine has an LLM key, it is written on the spot (10-30 s). `?generate=false` only reads.
+- `GET /v1/stories/{id}/digest` returns `{status, reason, llm_enabled, llm_paused, card_title, digest:
+  {card_title, dek, body, key_points, word_count, sources, kind, material, model, generated_at}, links,
+  thumbnail}`. If it is not ready yet and the engine has an LLM key, it is written on the spot (10-30 s).
+  `?generate=false` only reads.
+- When `digest` is null, `reason` says why in plain words: not written yet, no AI key on the engine, AI
+  paused (e.g. the Anthropic account is out of credits; the engine retries by itself every 10 minutes), or
+  no usable text for this story. It is never an error response: show the card with its source links instead.
 - Lists and feeds: add `include_digest=true` to get `digest` on every item (heavier responses).
 - The worker writes digests in the background for the best fresh stories first (most outlets, then
   postability), up to `DIGEST_PER_HOUR` (default 60). Needs `ANTHROPIC_API_KEY` on the worker.

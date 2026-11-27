@@ -790,6 +790,26 @@
     }
    }
   },
+  "/v1/admin/requeue-failed-tags": {
+   "post": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Requeue Failed Tags",
+    "description": "Give stories whose AI tagging gave up a fresh set of attempts (e.g. after topping up API credits).",
+    "operationId": "requeue_failed_tags_v1_admin_requeue_failed_tags_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
   "/v1/stories/{story_id}/retag": {
    "post": {
     "tags": [

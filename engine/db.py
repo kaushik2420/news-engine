@@ -21,6 +21,11 @@ def iso(dt: datetime | None) -> str | None:
     return dt.replace(microsecond=0).isoformat() + "Z" if dt else None
 
 
+def parse_iso(s: str) -> datetime:
+    """Inverse of iso(): back to naive UTC."""
+    return datetime.fromisoformat(s.rstrip("Z"))
+
+
 sources = Table(
     "sources", metadata,
     Column("id", String(64), primary_key=True),

@@ -146,9 +146,26 @@ async def generate(fetcher: Fetcher, story_id: str) -> dict:
     """Build and store the digest for one story. Raises LLMUnavailable without a key."""
     if not llm.available():
         raise llm.LLMUnavailable("digests need ANTHROPIC_API_KEY on the engine")
+    why = llm.paused()
+    if why:
+        raise llm.LLMPaused(why)
     with db.get_engine().begin() as c:                       # claim
+        before = c.execute(select(db.stories.c.digest_status, db.stories.c.digest_attempts)
+                           .where(db.stories.c.id == story_id)).first()
         c.execute(db.stories.update().where(db.stories.c.id == story_id).values(
             digest_attempts=func.coalesce(db.stories.c.digest_attempts, 0) + 1, digest_status="working"))
+    try:
+        return await _write(fetcher, story_id)
+    except llm.LLMPaused:
+        # the AI account refused (credits, key): put the story back exactly as it was, attempt not counted
+        with db.get_engine().begin() as c:
+            c.execute(db.stories.update().where(db.stories.c.id == story_id).values(
+                digest_status=before.digest_status if before else None,
+                digest_attempts=before.digest_attempts if before else 0))
+        raise
+
+
+async def _write(fetcher: Fetcher, story_id: str) -> dict:
     arts, kind = await _material(fetcher, story_id)
     if not arts or not any(a["text"] for a in arts):
         return _store(story_id, None, "skipped", "no article text available")
@@ -185,10 +202,26 @@ def _store(story_id: str, digest: dict | None, status: str, reason: str | None) 
             **({"word_count": digest["word_count"]} if digest else {})}
 
 
+async def generate_on_demand(fetcher: Fetcher, story_id: str) -> None:
+    """For the API/MCP: write the digest now if we can. Never raises for AI-side problems; the caller re-reads
+    the story and get_digest() explains what happened in `reason`."""
+    if not llm.available() or llm.paused():
+        return
+    try:
+        await generate(fetcher, story_id)
+    except llm.LLMPaused:
+        return
+    except Exception as e:
+        log.warning("on-demand digest failed for %s: %s", story_id, e)
+        _store(story_id, None, "pending", None)
+
+
 async def digest_pending(fetcher: Fetcher, limit: int = 3) -> dict:
     """Worker step: digest the best eligible stories, within the hourly budget."""
     if not llm.available():
         return {"made": 0, "mode": "off"}
+    if llm.paused():
+        return {"made": 0, "mode": "paused"}
     room = S.settings.digest_per_hour - made_last_hour()
     if room <= 0:
         return {"made": 0, "mode": "budget_reached"}
@@ -198,6 +231,8 @@ async def digest_pending(fetcher: Fetcher, limit: int = 3) -> dict:
     for sid in ids:
         try:
             made.append(await generate(fetcher, sid))
+        except llm.LLMPaused:
+            break                                    # account problem: stop, nothing counted against stories
         except Exception as e:                       # keep going; attempts cap retries at 3
             log.warning("digest failed for %s: %s", sid, e)
             _store(sid, None, "pending", None)
