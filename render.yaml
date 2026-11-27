@@ -26,6 +26,10 @@ envVarGroups:
         value: "2"
       - key: DEFAULT_SOURCE_INTERVAL_MIN
         value: "20"
+      - key: PUBLIC_BASE_URL       # switch to https://engine.backyardsaas.com once its DNS is live
+        value: https://news-engine-api-76d5.onrender.com
+      - key: DIGEST_PER_HOUR
+        value: "60"
 
 services:
   - type: web

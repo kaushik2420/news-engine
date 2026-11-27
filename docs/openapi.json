@@ -287,6 +287,16 @@
       }
      },
      {
+      "name": "include_digest",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "Include Digest"
+      }
+     },
+     {
       "name": "limit",
       "in": "query",
       "required": false,
@@ -503,6 +513,149 @@
        "application/json": {
         "schema": {}
        }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/stories/{story_id}/digest": {
+   "get": {
+    "tags": [
+     "digests"
+    ],
+    "summary": "Get Digest",
+    "description": "The engine-written 250-500 word account. Generated now if missing (takes ~10-30s) when generate=true.",
+    "operationId": "get_digest_v1_stories__story_id__digest_get",
+    "parameters": [
+     {
+      "name": "story_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Story Id"
+      }
+     },
+     {
+      "name": "generate",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": true,
+       "title": "Generate"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "digests"
+    ],
+    "summary": "Regenerate Digest",
+    "description": "Write the digest again from the latest material.",
+    "operationId": "regenerate_digest_v1_stories__story_id__digest_post",
+    "parameters": [
+     {
+      "name": "story_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Story Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/thumbnails/{story_id}.png": {
+   "get": {
+    "tags": [
+     "thumbnails"
+    ],
+    "summary": "Get Thumbnail",
+    "description": "Original card image for a story: wide 1200x630 or square 1080x1080. Public (no key), cacheable.",
+    "operationId": "get_thumbnail_thumbnails__story_id__png_get",
+    "parameters": [
+     {
+      "name": "story_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Story Id"
+      }
+     },
+     {
+      "name": "size",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "enum": [
+        "wide",
+        "square"
+       ],
+       "type": "string",
+       "default": "wide",
+       "title": "Size"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "image/png": {}
       }
      },
      "422": {
@@ -781,6 +934,16 @@
        "minimum": 1,
        "default": 30,
        "title": "Limit"
+      }
+     },
+     {
+      "name": "include_digest",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "Include Digest"
       }
      }
     ],
@@ -1976,6 +2139,11 @@
       "type": "boolean",
       "title": "Exclude Seen",
       "default": true
+     },
+     "include_digest": {
+      "type": "boolean",
+      "title": "Include Digest",
+      "default": false
      }
     },
     "type": "object",

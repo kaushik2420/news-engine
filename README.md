@@ -2,8 +2,9 @@
 
 The always-on backend brain for a social-content app. It collects news from publisher websites **without
 publisher APIs**, merges coverage of the same event into one story, tags every story against a fixed taxonomy,
-ranks personalised feeds, and turns any story into a brief for a LinkedIn post, X thread, Instagram carousel,
-Reel or Story. Everything is reachable through a REST API and an MCP server.
+ranks personalised feeds, writes a 250-500 word digest people can read in the app, draws an original card
+thumbnail for every story, and turns any story into a brief for a LinkedIn post, X thread, Instagram
+carousel, Reel or Story. Everything is reachable through a REST API and an MCP server.
 
 **Attaching an app or Claude to it? Read [INTEGRATION.md](INTEGRATION.md).**
 
@@ -18,7 +19,7 @@ sources ──► discover ──► store ──► cluster ──► enrich �
                                                 Postgres
             ┌────────────────────────────────────┴─────────────────────────────────────────┐
             REST API /v1 (feeds, stories, profiles, events, briefs, sources, webhooks, admin)
-            MCP /mcp     (21 tools for Claude)              /health  /docs
+            MCP /mcp     (22 tools for Claude)              /health  /docs
             └──────────────────────────────── api process ────────────────────────────────┘
 ```
 

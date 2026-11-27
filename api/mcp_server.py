@@ -10,7 +10,7 @@ from typing import Any
 import anyio
 from mcp.server.mcpserver import MCPServer
 
-from engine import ingest, runtime, service
+from engine import digest, ingest, llm, runtime, service
 
 from .auth import require_admin
 
@@ -26,7 +26,9 @@ Typical flows:
 - Learn: record_event(profile_id, story_id, type) for click/save/posted/dismiss to personalise future feeds.
 - Operate: engine_status, list_sources, add_source (homepage alone is enough), check_source_now, list_runs.
 - Add a site by sitemap: check_sitemap(url) first, then add_sitemap(url, name, region, default_category).
-Display rule: show `summary` (engine-written) and link out via `links`. `excerpt` is publisher text: short, attributed, optional.
+Cards: show `thumbnail.wide` (or `.square`), `card_title` or `headline`, and `dek`. Reading view: the `digest`
+(engine-written, 250-500 words; get it with get_story_digest) with its `sources` credited and linked.
+`excerpt` and `image` are publisher material: short, attributed, optional.
 """
 
 mcp = MCPServer(name="news-engine", title="News Engine", instructions=INSTRUCTIONS, version="1.0.0")
@@ -73,6 +75,20 @@ async def get_story(story_id: str) -> dict:
     return await _run(service.get_story, story_id)
 
 
+@mcp.tool(description="The engine-written digest of a story (250-500 words, synthesised from every outlet, with "
+                      "card_title, dek, key_points and source links) plus its thumbnail URLs. Generates it now if "
+                      "missing (10-30s) unless generate=false.")
+async def get_story_digest(story_id: str, generate: bool = True) -> dict:
+    try:
+        current = await anyio.to_thread.run_sync(service.get_digest, story_id)
+        if generate and current["status"] in ("not_ready", "updating") and llm.available():
+            await digest.generate(runtime.get_fetcher(), story_id)
+            current = await anyio.to_thread.run_sync(service.get_digest, story_id)
+        return current
+    except service.NotFound as e:
+        return {"error": str(e)}
+
+
 @mcp.tool(description="Stories covered by 2+ outlets in the last N hours, most-covered first.")
 async def get_trending(hours: int = 24, limit: int = 15, category: list[str] | None = None) -> dict:
     return await _run(service.trending, hours=hours, limit=min(limit, 100), category=category)
@@ -83,10 +99,11 @@ async def get_trending(hours: int = 24, limit: int = 15, category: list[str] | N
                       "profile dict {role, niche, goal, tone, categories, audiences, regions, platforms}. "
                       "Each item has rank.score with its parts so you can explain why it ranks there.")
 async def get_feed(profile_id: str | None = None, profile: dict | None = None, category: list[str] | None = None,
-                   region: list[str] | None = None, since_hours: int = 72, limit: int = 20) -> dict:
+                   region: list[str] | None = None, since_hours: int = 72, limit: int = 20,
+                   include_digest: bool = False) -> dict:
     filters = {"category": category, "region": region}
     return await _run(service.feed, profile_id=profile_id, profile=profile, filters=filters,
-                      since_hours=since_hours, limit=min(limit, 100))
+                      since_hours=since_hours, limit=min(limit, 100), include_digest=include_digest)
 
 
 @mcp.tool(description="Create or update a user profile (profile_id = the app's user id). Values must come from get_taxonomy.")

@@ -44,7 +44,7 @@ Tone: {p.get('tone') or 'clear, thoughtful, a little bold'}
 
 NEWS STORY
 Headline: {story['headline']}
-Facts: {tags.get('summary') or story.get('summary') or ''}
+Facts: {((story.get('digest') or {}).get('body') or tags.get('summary') or story.get('summary') or '')[:3500]}
 Reported by: {', '.join(sources)}
 
 ANGLE: {chosen or 'pick the strongest angle for this user'}

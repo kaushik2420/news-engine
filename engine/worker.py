@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 import yaml
 from sqlalchemy import or_, select
 
-from . import db, ingest, webhooks
+from . import db, digest, ingest, webhooks
 from . import settings as S
 from .fetch import Fetcher
 
@@ -154,6 +154,7 @@ async def cycle(fetcher: Fetcher, force_all: bool = False) -> dict:
         report["enrich"] = run_.detail = await ingest.enrich_pending(fetcher)
     with ingest.Run("tag") as run_:
         report["tag"] = run_.detail = await ingest.tag_pending()
+    report["digest"] = await digest.digest_pending(fetcher)
     report["webhooks"] = await webhooks.dispatch(fetcher.client)
     if retention_due():
         with ingest.Run("retention") as run_:
@@ -169,8 +170,8 @@ class Worker:
         self.fetcher, self.stop = fetcher, asyncio.Event()
         self.running: dict[str, asyncio.Task] = {}
         self.slot_free = asyncio.Event()            # set when a source finishes, so its slot is reused at once
-        self.stats = {"sources_checked": 0, "new_articles": 0, "enriched": 0, "tagged": 0, "webhooks_sent": 0,
-                      "loop_errors": 0}
+        self.stats = {"sources_checked": 0, "new_articles": 0, "enriched": 0, "tagged": 0, "digests": 0,
+                      "webhooks_sent": 0, "loop_errors": 0}
         self.started_at = db.utcnow()
 
     async def _sleep(self, seconds: float) -> None:
@@ -237,6 +238,14 @@ class Worker:
             record_run("tag", started, res)
         return bool(done)
 
+    async def _digest(self) -> bool:
+        started = db.utcnow()
+        res = await digest.digest_pending(self.fetcher)
+        if res.get("results"):
+            self.stats["digests"] += res["made"]
+            record_run("digest", started, res)
+        return bool(res.get("results"))
+
     async def _webhooks(self) -> bool:
         res = await webhooks.dispatch(self.fetcher.client)
         self.stats["webhooks_sent"] += res["sent"]
@@ -270,6 +279,7 @@ class Worker:
             self._source_loop(),
             self._guard("enrich", self._enrich, idle=tick, busy=1),
             self._guard("tag", self._tag, idle=tick, busy=1),
+            self._guard("digest", self._digest, idle=60, busy=2),
             self._guard("webhooks", self._webhooks, idle=10, busy=1),
             self._guard("retention", self._retention, idle=600),
         ]

@@ -97,6 +97,9 @@ class Clusterer:
         if not row.summary and article.get("summary"):
             values["summary"] = article["summary"]
         conn.execute(db.stories.update().where(db.stories.c.id == sid).values(**values))
+        if counts[0] > (row.source_count or 1):
+            from .digest import mark_stale
+            mark_stale(conn, sid)                    # a new outlet: the digest should include it
         self.df.update(toks - set(row.tokens or []))
         self.stories[sid] = (merged, values["updated_at"])
         return sid, False

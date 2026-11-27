@@ -51,6 +51,7 @@ Or commit a `.mcp.json` (keep the key in an env var, not in git):
 | `search_stories` | keyword search over headlines, summaries, entities |
 | `get_story` | one story with all source articles |
 | `get_trending` | stories covered by 2+ outlets, most-covered first |
+| `get_story_digest` | the 250-500 word digest + card title + thumbnail URLs (writes it if missing) |
 | `upsert_profile` / `get_profile` | store a user's interests (id = the app's user id) |
 | `get_feed` | personalised ranked feed (with score breakdown) |
 | `record_event` | click / save / posted / dismiss / view: the feed learns |
@@ -74,7 +75,10 @@ GET    /v1/stories                       filters: category news_type audience re
                                          sort=latest|trending|postability limit offset
 GET    /v1/stories/trending              ?hours=24
 GET    /v1/search?q=...                  keyword search
-GET    /v1/stories/{id}                  one story, all articles
+GET    /v1/stories/{id}                  one story, all articles, digest
+GET    /v1/stories/{id}/digest           the digest (written now if missing; ?generate=false to only read)
+POST   /v1/stories/{id}/digest           rewrite the digest (admin)
+GET    /thumbnails/{id}.png              card image, public; ?size=wide (1200x630, default) | square (1080x1080)
 POST   /v1/stories/{id}/brief            {platform, profile_id | profile, angle?}
 POST   /v1/stories/{id}/generate         same body; needs engine LLM key
 PUT    /v1/profiles/{user_id}            {role, niche, goal, tone, categories[], audiences[], regions[], platforms[]}
@@ -116,6 +120,30 @@ The fastest way to grow coverage. Needs the **admin** key.
 Refused (400) when robots.txt blocks our crawler, the URL is not a sitemap or feed, it has no articles from
 the last 72h (an archive), it is already a source, or it points at a private/internal address.
 
+## 3c. Digests and thumbnails (what makes a card worth tapping)
+
+**Thumbnail.** Every story has an original card image drawn by the engine: category colours and motif,
+the card title, region, outlet count and source names. No publisher photos, so no image-rights exposure.
+- `story.thumbnail.wide`: 1200x630 PNG, for feed cards and link previews
+- `story.thumbnail.square`: 1080x1080 PNG, for grids and Instagram
+- Public URLs (no key), cacheable (`ETag`, `Cache-Control: public, max-age=3600`): use them directly in `<img>`.
+- Set `BRAND_NAME` on the API service to print the app's name in the corner.
+
+**Digest.** A 250-500 word account of the story that people read in the app, written by Claude in its own
+words from the full text of every outlet covering it, with each claim attributed and the sources listed.
+- `story.digest_status`: `ready` | `updating` (a new outlet joined; the old digest is still served) |
+  `not_ready` | `unavailable` (no usable text, or it kept quoting the source)
+- `story.card_title` and `story.dek`: a punchy title and one-line standfirst for the card (once ready)
+- `GET /v1/stories/{id}/digest` returns `{status, card_title, digest: {card_title, dek, body, key_points,
+  word_count, sources, kind, material, model, generated_at}, links, thumbnail}`. If it is not ready yet
+  and the engine has an LLM key, it is written on the spot (10-30 s). `?generate=false` only reads.
+- Lists and feeds: add `include_digest=true` to get `digest` on every item (heavier responses).
+- The worker writes digests in the background for the best fresh stories first (most outlets, then
+  postability), up to `DIGEST_PER_HOUR` (default 60). Needs `ANTHROPIC_API_KEY` on the worker.
+
+**Reading view rule:** show the digest `body`, then "Reported by" with each `sources[].name` linked to
+its `url`. Keep the link to the originals visible.
+
 ## 4. The story object (what the app renders)
 
 ```json
@@ -134,13 +162,21 @@ the last 72h (an archive), it is already a source, or it points at a private/int
     "shelf_life": "This week", "entities": ["WhatsApp", "Meta"], "postability": 82,
     "angles": ["Scheduling turns WhatsApp into a CRM-lite", "..."]
   },
+  "card_title": "WhatsApp adds scheduled messages",   // from the digest, else null: fall back to headline
+  "dek": "Users can now queue messages up to 14 days ahead.",
+  "thumbnail": {"wide": "https://<engine-host>/thumbnails/a643f883d73f4785.png",
+                "square": "https://<engine-host>/thumbnails/a643f883d73f4785.png?size=square"},
+  "image_credit": "TechCrunch",        // owner of `image` (publisher photo): show only with credit/permission
+  "digest_status": "ready",            // ready | updating | not_ready | unavailable
+  "digest": {...},                     // only in get_story / ?include_digest=true (see 3c)
   "links": [{"source": "TechCrunch", "source_id": "techcrunch", "url": "https://..."}],
   "rank": {"relevance": 0.9, "freshness": 0.95, "trending": 1.0, "postability": 0.91, "score": 1.16}  // feeds only
 }
 ```
 
-**Display rules (copyright):** show `headline`, `summary`, source names and link out via `links`.
-`excerpt` is publisher text: if shown, keep it short and attributed. The engine never returns article bodies.
+**Display rules (copyright):** cards use `thumbnail`, `card_title` (or `headline`) and `dek`; the reading view
+uses the `digest` with its sources credited and linked. `excerpt` (publisher text) and `image` (publisher
+photo) are optional and must be attributed. The engine never returns article bodies.
 Posts written from briefs must add the user's own view and credit the sources listed in the brief.
 
 ## 5. Webhooks

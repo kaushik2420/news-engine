@@ -12,10 +12,11 @@ import contextlib
 from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+import anyio
 from pydantic import BaseModel, Field
 
-from engine import db, ingest, llm, runtime, service, worker
+from engine import db, digest, ingest, llm, runtime, service, thumbnail, worker
 from engine.generate import FORMATS
 
 from .auth import AuthMiddleware, require_admin, scope_var
@@ -83,6 +84,7 @@ class FeedIn(BaseModel):
     since_hours: int = Field(72, ge=1, le=24 * 30)
     limit: int = Field(30, ge=1, le=200)
     exclude_seen: bool = True
+    include_digest: bool = False
 
 
 class EventIn(BaseModel):
@@ -183,13 +185,13 @@ def list_stories(category: list[str] = Query([]), news_type: list[str] = Query([
                  region: list[str] = Query([]), tone: list[str] = Query([]), shelf_life: list[str] = Query([]),
                  source_id: str | None = None, q: str | None = None, since_hours: int = Query(72, ge=1, le=720),
                  min_sources: int = 1, min_postability: int = 0, sort: Literal["latest", "trending", "postability"] = "latest",
-                 include_untagged: bool = True, include_roundups: bool = False,
+                 include_untagged: bool = True, include_roundups: bool = False, include_digest: bool = False,
                  limit: int = Query(30, ge=1, le=200), offset: int = Query(0, ge=0)):
     return service.list_stories(category=category, news_type=news_type, audience=audience, region=region, tone=tone,
                                 shelf_life=shelf_life, source_id=source_id, q=q, since_hours=since_hours,
                                 min_sources=min_sources, min_postability=min_postability, sort=sort,
                                 include_untagged=include_untagged, include_roundups=include_roundups,
-                                limit=limit, offset=offset)
+                                include_digest=include_digest, limit=limit, offset=offset)
 
 
 @router.get("/v1/stories/trending", tags=["stories"])
@@ -206,6 +208,39 @@ def search(q: str = Query(..., min_length=2), since_hours: int = Query(168, ge=1
 @router.get("/v1/stories/{story_id}", tags=["stories"])
 def get_story(story_id: str):
     return service.get_story(story_id)
+
+
+@router.get("/v1/stories/{story_id}/digest", tags=["digests"])
+async def get_digest(story_id: str, generate: bool = True):
+    """The engine-written 250-500 word account. Generated now if missing (takes ~10-30s) when generate=true."""
+    current = service.get_digest(story_id)
+    if generate and current["status"] in ("not_ready", "updating") and llm.available():
+        await digest.generate(runtime.get_fetcher(), story_id)
+        current = service.get_digest(story_id)
+    return current
+
+
+@router.post("/v1/stories/{story_id}/digest", tags=["digests"], dependencies=[Depends(admin)])
+async def regenerate_digest(story_id: str):
+    """Write the digest again from the latest material."""
+    service.get_story(story_id)
+    with db.get_engine().begin() as c:
+        c.execute(db.stories.update().where(db.stories.c.id == story_id).values(digest_attempts=0))
+    await digest.generate(runtime.get_fetcher(), story_id)
+    return service.get_digest(story_id)
+
+
+@router.get("/thumbnails/{story_id}.png", tags=["thumbnails"], response_class=Response,
+            responses={200: {"content": {"image/png": {}}}})
+async def get_thumbnail(story_id: str, request: Request, size: Literal["wide", "square"] = "wide"):
+    """Original card image for a story: wide 1200x630 or square 1080x1080. Public (no key), cacheable."""
+    story = service.story_for_thumbnail(story_id)
+    tag = thumbnail.etag(story, size)
+    headers = {"ETag": tag, "Cache-Control": "public, max-age=3600"}
+    if request.headers.get("if-none-match") == tag:
+        return Response(status_code=304, headers=headers)
+    png = await anyio.to_thread.run_sync(thumbnail.render_cached, story, size)
+    return Response(png, media_type="image/png", headers=headers)
 
 
 @router.post("/v1/stories/{story_id}/brief", tags=["posts"])
@@ -232,14 +267,16 @@ def retag(story_id: str):
 @router.post("/v1/feed", tags=["feed"])
 def feed(body: FeedIn):
     return service.feed(profile_id=body.profile_id, profile=body.profile.model_dump() if body.profile else None,
-                        filters=body.filters, since_hours=body.since_hours, limit=body.limit, exclude_seen=body.exclude_seen)
+                        filters=body.filters, since_hours=body.since_hours, limit=body.limit, exclude_seen=body.exclude_seen,
+                        include_digest=body.include_digest)
 
 
 @router.get("/v1/profiles/{profile_id}/feed", tags=["feed"])
 def profile_feed(profile_id: str, category: list[str] = Query([]), region: list[str] = Query([]),
-                 since_hours: int = Query(72, ge=1, le=720), limit: int = Query(30, ge=1, le=200)):
+                 since_hours: int = Query(72, ge=1, le=720), limit: int = Query(30, ge=1, le=200),
+                 include_digest: bool = False):
     return service.feed(profile_id=profile_id, filters={"category": category, "region": region},
-                        since_hours=since_hours, limit=limit)
+                        since_hours=since_hours, limit=limit, include_digest=include_digest)
 
 
 @router.put("/v1/profiles/{profile_id}", tags=["feed"])

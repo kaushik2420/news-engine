@@ -30,7 +30,35 @@ class Invalid(ValueError):
 
 
 # ============================================================================ serialisation
-def _story_out(r, arts: list, full: bool = False) -> dict:
+def thumbnail_urls(story_id: str) -> dict:
+    base = S.settings.public_base_url
+    path = f"{base}/thumbnails/{story_id}.png"
+    return {"wide": path, "square": path + "?size=square"}
+
+
+def _digest_of(r) -> dict | None:
+    dg = getattr(r, "digest", None)
+    if isinstance(dg, str):
+        import json as _json
+        try:
+            dg = _json.loads(dg)
+        except ValueError:
+            dg = None
+    if not dg or "error" in dg or not dg.get("body"):
+        return None
+    return dg
+
+
+def _digest_state(r) -> str:
+    st = getattr(r, "digest_status", None)
+    if st in ("done", "stale") and _digest_of(r):
+        return "ready" if st == "done" else "updating"
+    if st in ("skipped", "failed"):
+        return "unavailable"
+    return "not_ready"
+
+
+def _story_out(r, arts: list, full: bool = False, include_digest: bool = False) -> dict:
     tags = dict(r.tags or {})
     llm_summary = tags.pop("summary", None) if r.tag_status == "done" else None
     tags.pop("summary", None)
@@ -48,9 +76,18 @@ def _story_out(r, arts: list, full: bool = False) -> dict:
         "is_trending": r.source_count >= S.settings.trending_source_count,
         "is_roundup": is_roundup,
         "tag_status": r.tag_status, "tags": tags,
+        "card_title": None,
+        "thumbnail": thumbnail_urls(r.id),
+        "image_credit": next((a["source_name"] for a in arts if a.get("image")), None),
+        "digest_status": _digest_state(r),
         "links": [{"source": a["source_name"], "source_id": a["source_id"], "url": a["url"]} for a in arts],
     }
-    if full:
+    dg = _digest_of(r)
+    if dg:
+        out["card_title"] = dg.get("card_title")
+        out["dek"] = dg.get("dek")
+    if full or include_digest:
+        out["digest"] = dg
         out["articles"] = [{k: a[k] for k in ("id", "source_id", "source_name", "url", "title", "published_at", "via", "image")}
                            for a in arts]
     return out
@@ -110,13 +147,14 @@ def _where(*, since_hours: int | None, filters: dict | None = None, q: str | Non
     return cond
 
 
-def _fetch(cond: list, order: list, limit: int, offset: int = 0, full: bool = False) -> list[dict]:
+def _fetch(cond: list, order: list, limit: int, offset: int = 0, full: bool = False,
+           include_digest: bool = False) -> list[dict]:
     with db.get_engine().connect() as c:
         rows = c.execute(select(db.stories).where(*cond).order_by(*order).limit(limit).offset(offset)).all()
         arts = _articles_for(c, [r.id for r in rows])
     out = []
     for r in rows:
-        item = _story_out(r, arts.get(r.id, []), full=full)
+        item = _story_out(r, arts.get(r.id, []), full=full, include_digest=include_digest)
         item["_updated"] = r.updated_at
         out.append(item)
     return out
@@ -166,7 +204,8 @@ def taxonomy() -> dict:
 def list_stories(*, category=None, news_type=None, audience=None, region=None, tone=None, shelf_life=None,
                  source_id: str | None = None, q: str | None = None, since_hours: int = 72, min_sources: int = 1,
                  min_postability: int = 0, sort: str = "latest", include_untagged: bool = True,
-                 include_roundups: bool = False, limit: int = 30, offset: int = 0) -> dict:
+                 include_roundups: bool = False, include_digest: bool = False, limit: int = 30,
+                 offset: int = 0) -> dict:
     st = db.stories.c
     orders = {"latest": [st.updated_at.desc()], "trending": [st.source_count.desc(), st.updated_at.desc()],
               "postability": [st.postability.desc(), st.updated_at.desc()]}
@@ -178,7 +217,7 @@ def list_stories(*, category=None, news_type=None, audience=None, region=None, t
                   min_postability=min_postability, include_untagged=include_untagged, include_roundups=include_roundups)
     with db.get_engine().connect() as c:
         total = c.execute(select(func.count()).select_from(db.stories).where(*cond)).scalar()
-    items = _fetch(cond, orders[sort] + [st.id], limit, offset)
+    items = _fetch(cond, orders[sort] + [st.id], limit, offset, include_digest=include_digest)
     return {"total": total, "offset": offset, "limit": limit, "items": _strip(items)}
 
 
@@ -191,6 +230,25 @@ def get_story(story_id: str) -> dict:
 
 def trending(hours: int = 24, limit: int = 20, **filters) -> dict:
     return list_stories(since_hours=hours, min_sources=2, sort="trending", limit=limit, **filters)
+
+
+def get_digest(story_id: str) -> dict:
+    s = get_story(story_id)
+    return {"story_id": story_id, "status": s["digest_status"], "headline": s["headline"],
+            "card_title": s["card_title"], "digest": s.get("digest"), "links": s["links"],
+            "thumbnail": s["thumbnail"]}
+
+
+def story_for_thumbnail(story_id: str) -> dict:
+    with db.get_engine().connect() as c:
+        r = c.execute(select(db.stories).where(db.stories.c.id == story_id)).first()
+        if not r:
+            raise NotFound(f"story {story_id} not found")
+        arts = _articles_for(c, [story_id]).get(story_id, [])
+    dg = _digest_of(r)
+    return {"id": r.id, "headline": r.headline, "card_title": dg.get("card_title") if dg else None,
+            "tags": r.tags or {}, "source_count": r.source_count,
+            "sources": list(dict.fromkeys(a["source_name"] for a in arts))}
 
 
 # ============================================================================ profiles + feed
@@ -253,7 +311,8 @@ def record_event(profile_id: str, story_id: str, type: str, platform: str | None
 
 
 def feed(*, profile_id: str | None = None, profile: dict | None = None, filters: dict | None = None,
-         since_hours: int = 72, limit: int = 30, exclude_seen: bool = True, include_untagged: bool = False) -> dict:
+         since_hours: int = 72, limit: int = 30, exclude_seen: bool = True, include_untagged: bool = False,
+         include_digest: bool = False) -> dict:
     prof, seen = None, set()
     if profile_id:
         p = get_profile(profile_id)
@@ -265,7 +324,7 @@ def feed(*, profile_id: str | None = None, profile: dict | None = None, filters:
     elif profile:
         prof = {"data": _clean_profile(profile), "weights": {}}
     cond = _where(since_hours=since_hours, filters=filters, include_untagged=include_untagged, exclude=seen)
-    pool = _fetch(cond, [db.stories.c.updated_at.desc()], FEED_POOL)
+    pool = _fetch(cond, [db.stories.c.updated_at.desc()], FEED_POOL, include_digest=include_digest)
     ranked = rank.build_feed(pool, prof, {}, limit, db.utcnow())
     return {"profile_id": profile_id, "count": len(ranked), "items": _strip(ranked)}
 

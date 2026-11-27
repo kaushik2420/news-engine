@@ -19,6 +19,7 @@ from engine import settings as S
 log = logging.getLogger("engine.auth")
 scope_var: contextvars.ContextVar[str] = contextvars.ContextVar("scope", default="none")
 PUBLIC = {"/", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"}
+PUBLIC_PREFIXES = ("/thumbnails/",)       # card images: loaded by <img> tags, hold only headline + source names
 
 
 def resolve_scope(key: str | None) -> str:
@@ -51,7 +52,7 @@ class AuthMiddleware:
         if not key and path.startswith("/mcp"):
             key = (parse_qs(scope.get("query_string", b"").decode()).get("key") or [None])[0]
         level = resolve_scope(key)
-        if path not in PUBLIC and level == "none":
+        if path not in PUBLIC and not path.startswith(PUBLIC_PREFIXES) and level == "none":
             body = b'{"detail":"missing or invalid API key"}'
             await send({"type": "http.response.start", "status": 401,
                         "headers": [(b"content-type", b"application/json"), (b"www-authenticate", b"Bearer")]})

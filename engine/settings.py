@@ -30,6 +30,14 @@ class Settings:
     tag_model: str = field(default_factory=lambda: os.getenv("TAG_MODEL", "claude-haiku-5-5"))
     write_model: str = field(default_factory=lambda: os.getenv("WRITE_MODEL", "claude-sonnet-5-5"))
 
+    # digests (engine-written stories people read in the app) and thumbnails
+    digest_model: str = field(default_factory=lambda: os.getenv("DIGEST_MODEL", "claude-haiku-5-5"))
+    digest_min_words: int = field(default_factory=lambda: _int("DIGEST_MIN_WORDS", 250))
+    digest_max_words: int = field(default_factory=lambda: _int("DIGEST_MAX_WORDS", 500))
+    digest_per_hour: int = field(default_factory=lambda: _int("DIGEST_PER_HOUR", 60))
+    digest_window_hours: int = field(default_factory=lambda: _int("DIGEST_WINDOW_HOURS", 48))
+    public_base_url: str = field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").rstrip("/"))
+
     # crawling behaviour
     user_agent: str = field(default_factory=lambda: os.getenv(
         "ENGINE_USER_AGENT", "NewsEngineBot/1.0 (+https://engine.backyardsaas.com/bot)"))

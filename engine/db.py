@@ -79,6 +79,10 @@ stories = Table(
     Column("shelf_life", String(32)),
     Column("is_roundup", Boolean, default=False),
     Column("search_text", Text),                     # lowercased headline + summary + entities
+    Column("digest", JSON),                          # engine-written 250-500 word account (engine/digest.py)
+    Column("digest_status", String(16)),             # None | pending | working | done | stale | skipped | failed
+    Column("digest_attempts", Integer, default=0),
+    Column("digest_at", DateTime),
     Column("created_at", DateTime, default=utcnow),
 )
 
@@ -168,7 +172,9 @@ Index("ix_stories_postability", stories.c.postability, stories.c.updated_at)
 # columns added after v1; migrate() adds them to databases created before they existed
 LATER_COLUMNS = {"stories": {"cat_text": "TEXT", "region_text": "TEXT", "audience_text": "TEXT",
                              "news_type": "VARCHAR(64)", "tone": "VARCHAR(32)", "shelf_life": "VARCHAR(32)",
-                             "is_roundup": "BOOLEAN DEFAULT FALSE", "search_text": "TEXT"}}
+                             "is_roundup": "BOOLEAN DEFAULT FALSE", "search_text": "TEXT",
+                             "digest": "JSON", "digest_status": "VARCHAR(16)", "digest_attempts": "INTEGER DEFAULT 0",
+                             "digest_at": "TIMESTAMP"}}
 
 
 def bar(values) -> str:
