@@ -56,22 +56,23 @@ async def autodiscover(fetcher: Fetcher, src) -> dict:
     if not home:
         return found
     if not src.rss_url:
-        r = await fetcher.get(home)
+        r = await fetcher.get(home, retries=0)          # discovery is best-effort: fail fast, never stall a cycle
         if r.ok:
             feeds = feeds_in_html(r.content, r.url)
             if feeds:
                 found["rss_url"] = feeds[0]
-        if "rss_url" not in found:          # many sites don't advertise their feed: try the usual paths
+        if "rss_url" not in found and r.status != 0:    # host answered: try the usual feed paths
             for path in COMMON_FEED_PATHS:
-                url = urljoin(home, path)
-                rf = await fetcher.get(url)
+                rf = await fetcher.get(urljoin(home, path), retries=0)
                 if rf.ok and from_rss(rf.content):
                     found["rss_url"] = rf.url
+                    break
+                if rf.status == 0:                      # host stopped answering: stop probing it
                     break
     if not src.sitemap_url:
         _, maps = await fetcher.robots(home)
         for url in pick_news_sitemaps(maps)[:3]:
-            r = await fetcher.get(url)
+            r = await fetcher.get(url, retries=0)
             if not r.ok:
                 continue
             kind, items = parse_sitemap(r.content)

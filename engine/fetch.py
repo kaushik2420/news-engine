@@ -65,7 +65,8 @@ class Fetcher:
         rp, maps = None, []
         try:
             await self._pace(root)
-            r = await self.client.get(root + "/robots.txt")
+            async with asyncio.timeout(30):
+                r = await self.client.get(root + "/robots.txt")
             if r.status_code == 200:
                 lines = r.text.splitlines()
                 rp = urllib.robotparser.RobotFileParser()
@@ -74,7 +75,7 @@ class Fetcher:
             elif r.status_code in (401, 403):
                 rp = urllib.robotparser.RobotFileParser()
                 rp.parse(["User-agent: *", "Disallow: /"])
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, TimeoutError) as e:
             log.debug("robots unreachable for %s: %s", root, e)
         self._robots[root] = (time.time(), rp, maps)
         return rp, maps

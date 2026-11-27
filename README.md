@@ -8,7 +8,7 @@ Reel or Story. Everything is reachable through a REST API and an MCP server.
 **Attaching an app or Claude to it? Read [INTEGRATION.md](INTEGRATION.md).**
 
 ```
-            ┌──────────────────────────── worker (runs all day) ────────────────────────────┐
+            ┌───────────── worker (runs all day: independent loops, one slow site never stalls it) ─────────────┐
 sources ──► discover ──► store ──► cluster ──► enrich ──► tag ──► webhooks      retention
             news sitemap  articles  stable      page meta   LLM or   story.created   purge old
             + RSS         (dedupe   story IDs   + body      keyword  .tagged         bodies,

@@ -48,6 +48,7 @@ sources:
     name: NPR
     homepage: https://www.npr.org/
     sitemap_url: https://googlecrawl.npr.org/news/sitemap_news.xml
+    autodiscover: false            # www.npr.org times out from our host; the sitemap is on googlecrawl.npr.org
     region: US
     default_category: World
     interval_min: 15
@@ -147,3 +148,6 @@ changes:
   - id: 2026-11-27-abc-rss
     source: abc-australia
     set: {rss_url: "https://www.abc.net.au/news/feed/51120/rss.xml", sitemap_url: null, autodiscover: false}
+  - id: 2026-11-27-npr-no-discovery
+    source: npr
+    set: {autodiscover: false}

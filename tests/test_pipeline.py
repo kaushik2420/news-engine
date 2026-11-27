@@ -161,3 +161,40 @@ def test_slow_drip_server_cannot_hang_a_fetch(engine_env, monkeypatch):
     f = F.Fetcher(transport=httpx.MockTransport(handler), per_domain_interval=0)
     r = run(f.get("https://slow.example/sitemap.xml", retries=0))
     assert r.status == 0 and not r.ok
+
+
+def test_live_worker_keeps_going_while_one_source_hangs(engine_env, monkeypatch):
+    """Regression for the first world-news deploy: a slow site froze the whole cycle and the heartbeat."""
+    import asyncio
+    import httpx
+    from engine import fetch as F
+    from tests.fixtures_transport import transport
+    base = transport()
+
+    async def handler(req):
+        if req.url.host == "tarpit.example" and req.url.path != "/robots.txt":
+            await asyncio.sleep(30)                     # never answers in time
+        return base.handle_request(req)
+    f = F.Fetcher(transport=httpx.MockTransport(handler), per_domain_interval=0)
+    monkeypatch.setattr(F, "TOTAL_DEADLINE_SEC", 20)
+    monkeypatch.setattr(worker, "SOURCE_DEADLINE_SEC", 2)
+    worker.seed_sources()
+    service.create_source({"id": "tarpit", "name": "Tarpit", "sitemap_url": "https://tarpit.example/news.xml",
+                           "autodiscover": False})
+
+    async def scenario():
+        w = worker.Worker(f)
+        task = asyncio.create_task(w.run())
+        await asyncio.sleep(1.5)                        # tarpit still hanging; others must be done
+        mid = {**w.stats, "checking_now": sorted(w.running)}
+        hb, _ = db.get_state("worker")
+        await asyncio.sleep(2.5)                        # past the tarpit's 2s cap
+        w.stop.set()
+        await asyncio.wait_for(task, 10)
+        return mid, hb
+    mid, hb = run(scenario())
+    assert mid["new_articles"] == 35                                          # all fixture sources finished meanwhile
+    assert all(service.get_source(s)["last_success_at"] for s in ("inc42", "techcrunch", "yourstory"))
+    assert mid["checking_now"] == ["tarpit"] and hb["status"] == "running"    # only the tarpit is still busy
+    t = service.get_source("tarpit")
+    assert t["consecutive_failures"] == 1 and "timed out" in t["last_error"]  # and the tarpit backs off
