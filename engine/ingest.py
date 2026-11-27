@@ -321,7 +321,7 @@ async def tag_pending(limit: int | None = None) -> dict:
             if tags:
                 if (r.tags or {}).get("is_roundup"):
                     tags = {**tags, "is_roundup": True}      # structural flags survive re-tagging
-                values.update(tags=tags, postability=tags["postability"])
+                values.update(tags=tags, postability=tags["postability"], **db.tag_columns(tags, r.headline, r.summary))
             c.execute(db.stories.update().where(db.stories.c.id == r.id).values(**values))
             if tags:
                 webhooks.enqueue(c, "story.tagged", {"story_id": r.id, "headline": r.headline,
@@ -349,3 +349,115 @@ def retention() -> dict:
         cache = c.execute(delete(db.fetch_cache).where(db.fetch_cache.c.updated_at < now - timedelta(days=30))).rowcount
     return {"bodies_cleared": bodies, "articles_deleted": arts, "stories_deleted": stories_n, "runs_deleted": runs_n,
             "deliveries_deleted": deliv, "cache_deleted": cache}
+
+
+# ---------------------------------------------------------------------------- sitemap check + add
+TWO_PART_TLDS = {"co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.in", "net.in", "org.in",
+                 "co.jp", "co.nz", "com.sg", "com.br", "co.za", "com.cn", "com.hk"}
+
+
+def suggest_id(url: str) -> tuple[str, str]:
+    """('aljazeera', 'https://www.aljazeera.com/') from a sitemap URL; handles abc.net.au-style domains."""
+    from urllib.parse import urlsplit
+    import re as _re
+    host = (urlsplit(url).hostname or "").lower()
+    labels = host.split(".")
+    keep = 3 if ".".join(labels[-2:]) in TWO_PART_TLDS else 2
+    registered = ".".join(labels[-keep:])
+    slug = _re.sub(r"[^a-z0-9]+", "-", labels[-keep]).strip("-") or "source"
+    return slug[:50], f"https://{'www.' if host.startswith('www.') else ''}{registered}/"
+
+
+async def probe_sitemap(fetcher: Fetcher, url: str) -> dict:
+    """Fetch a sitemap (or feed) and report whether the engine can use it. Changes nothing."""
+    from .netguard import UnsafeURL, assert_public_url
+    out = {"sitemap_url": url, "ok": False, "kind": None, "robots_allowed": None, "http_status": None,
+           "articles_listed": 0, "fresh_articles": 0, "has_titles": False, "newest_published_at": None,
+           "sample": [], "problems": [], "warnings": []}
+    try:
+        await asyncio.to_thread(assert_public_url, url)
+    except UnsafeURL as e:
+        out["problems"].append(str(e))
+        return out
+    out["robots_allowed"] = await fetcher.allowed(url)
+    if not out["robots_allowed"]:
+        out["problems"].append("the site's robots.txt does not allow our crawler to fetch this URL")
+        return out
+    r = await fetcher.get(url)
+    out["http_status"] = r.status
+    if not r.ok:
+        out["problems"].append(f"could not fetch it (HTTP {r.status or 'error'})")
+        return out
+    kind, items = parse_sitemap(r.content)
+    if kind == "invalid":
+        feed = from_rss(r.content)
+        if feed:
+            kind, items = "rss", feed
+            out["warnings"].append("this is an RSS/Atom feed, not a sitemap: it will be added as the source's RSS feed")
+        else:
+            out["problems"].append("this is not a sitemap or a feed (no <urlset>, <sitemapindex> or RSS items found)")
+            return out
+    elif kind == "index":
+        children = rank_sitemap_children(items, limit=2)
+        if not children:
+            out["problems"].append("sitemap index lists no child sitemaps")
+            return out
+        out["children_checked"], items, news = children, [], False
+        for child in children:
+            rc = await fetcher.get(child)
+            if rc.ok and parse_sitemap(rc.content)[0] == "urlset":
+                items += parse_sitemap(rc.content)[1]
+                news = news or is_news_sitemap(rc.content)
+        kind = "index (news)" if news else "index"
+    else:
+        kind = "news" if is_news_sitemap(r.content) else "standard"
+    out["kind"] = kind
+    cutoff = db.utcnow() - timedelta(hours=S.settings.max_article_age_hours)
+    dated = [c for c in items if c.published]
+    fresh = [c for c in dated if c.published >= cutoff]
+    out["articles_listed"], out["fresh_articles"] = len(items), len(fresh)
+    out["has_titles"] = any(c.title for c in items)
+    if dated:
+        out["newest_published_at"] = db.iso(max(c.published for c in dated))
+    out["sample"] = [{"title": c.title or None, "url": c.url, "published_at": db.iso(c.published)}
+                     for c in sorted(fresh, key=lambda c: c.published, reverse=True)[:5]]
+    if not items:
+        out["problems"].append("the sitemap is empty")
+    elif not fresh:
+        out["problems"].append(f"no articles from the last {S.settings.max_article_age_hours}h: this looks like an "
+                               "archive sitemap. Look for a 'news' sitemap in the site's robots.txt")
+    if items and not out["has_titles"]:
+        out["warnings"].append("entries have no titles: the engine will open each article page to get one (slower)")
+    if kind == "standard" and len(items) > 5000:
+        out["warnings"].append("very large standard sitemap; a news sitemap would be faster if the site has one")
+    out["ok"] = not out["problems"]
+    return out
+
+
+async def add_sitemap(fetcher: Fetcher, data: dict) -> dict:
+    """Check a sitemap, create a source for it, and run its first ingest. Raises Invalid if it can't be used."""
+    from . import service
+    url = str(data.get("sitemap_url") or "").strip()
+    probe = await probe_sitemap(fetcher, url)
+    if not probe["ok"]:
+        raise service.Invalid("sitemap cannot be used: " + "; ".join(probe["problems"]))
+    slug, homepage = suggest_id(url)
+    sid = data.get("id") or slug
+    existing = {s["id"] for s in service.list_sources()}
+    for s in service.list_sources():
+        if url in (s["sitemap_url"], s["rss_url"]):
+            raise service.Invalid(f"this URL is already used by source '{s['id']}'")
+    base, n = sid, 2
+    while sid in existing:
+        sid, n = f"{base}-{n}", n + 1
+    fields = {"id": sid, "name": data.get("name") or sid.replace("-", " ").title(),
+              "homepage": data.get("homepage") or homepage, "region": data.get("region"),
+              "default_category": data.get("default_category"), "interval_min": data.get("interval_min") or 20,
+              "rss_url": data.get("rss_url"), "autodiscover": data.get("autodiscover", True)}
+    if probe["kind"] == "rss":
+        fields["rss_url"] = url
+    else:
+        fields["sitemap_url"] = url
+    source = service.create_source({k: v for k, v in fields.items() if v is not None})
+    first = await ingest_source(fetcher, sid)
+    return {"source": service.get_source(sid), "check": probe, "first_ingest": first}

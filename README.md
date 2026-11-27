@@ -18,7 +18,7 @@ sources ──► discover ──► store ──► cluster ──► enrich �
                                                 Postgres
             ┌────────────────────────────────────┴─────────────────────────────────────────┐
             REST API /v1 (feeds, stories, profiles, events, briefs, sources, webhooks, admin)
-            MCP /mcp     (19 tools for Claude)              /health  /docs
+            MCP /mcp     (21 tools for Claude)              /health  /docs
             └──────────────────────────────── api process ────────────────────────────────┘
 ```
 
@@ -80,6 +80,9 @@ Health check for the host: `GET /health` (503 if the worker heartbeat is older t
 
 ## Operating it
 
+- Add a site by sitemap (best): `POST /v1/sitemaps/check {"sitemap_url": ...}` (dry run), then
+  `POST /v1/sitemaps {"sitemap_url": ..., "name": ..., "region": ..., "default_category": ...}`.
+  From Claude: `check_sitemap` then `add_sitemap`.
 - Add a source: `POST /v1/sources {"id": "entrackr", "name": "Entrackr", "homepage": "https://entrackr.com/"}`
   then `POST /v1/sources/entrackr/ingest` to see what it finds. Or from Claude: `add_source` + `check_source_now`.
 - Source health: `GET /v1/sources` (ok / degraded / failing / pending / disabled with `last_error`).

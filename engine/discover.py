@@ -86,8 +86,21 @@ def from_rss(content: bytes) -> list[Candidate]:
 
 
 # ---- Sitemaps -----------------------------------------------------------------
+def ungzip(content: bytes, limit: int = 50_000_000) -> bytes:
+    """Sitemaps are often served as .xml.gz files (not HTTP-compressed), e.g. sitemap-index.xml.gz."""
+    if content[:2] != b"\x1f\x8b":
+        return content
+    import zlib
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        return d.decompress(content, limit)
+    except zlib.error:
+        return b""
+
+
 def parse_sitemap(content: bytes) -> tuple[str, list]:
     """Returns ("index", [(child_url, lastmod)]) or ("urlset", [Candidate])."""
+    content = ungzip(content)
     try:
         root = ET.fromstring(content)
     except ET.ParseError:
@@ -122,7 +135,7 @@ def parse_sitemap(content: bytes) -> tuple[str, list]:
 
 
 def is_news_sitemap(content: bytes) -> bool:
-    return NS_NEWS.encode() in content[:5000]
+    return NS_NEWS.encode() in ungzip(content)[:5000]
 
 
 def rank_sitemap_children(children: list[tuple[str, datetime | None]], limit: int = 2) -> list[str]:

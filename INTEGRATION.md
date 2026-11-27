@@ -57,6 +57,8 @@ Or commit a `.mcp.json` (keep the key in an env var, not in git):
 | `get_post_brief` | everything needed to write a LinkedIn / X / carousel / Reel / Story post |
 | `generate_post` | the engine writes the draft (only if it has an LLM key) |
 | `list_sources` / `get_source` | sources and their health |
+| `check_sitemap` | dry run: can the engine use this sitemap? (admin key) |
+| `add_sitemap` | add a news site from its sitemap URL and ingest it immediately (admin key) |
 | `add_source` / `update_source` / `check_source_now` | manage sources (admin key) |
 | `list_recent_articles` / `list_runs` | raw discoveries and the engine's work log |
 
@@ -85,6 +87,9 @@ GET    /v1/sources                       (admin for writes below)
 POST   /v1/sources                       {id, name, homepage | sitemap_url | rss_url | listing_url, ...}
 PATCH  /v1/sources/{id}
 DELETE /v1/sources/{id}
+POST   /v1/sitemaps/check                {sitemap_url}  dry run: robots, kind, fresh articles, sample, problems
+POST   /v1/sitemaps                      {sitemap_url, name?, region?, default_category?, rss_url?, interval_min?}
+                                         check + create the source + first ingest (201), or 400 with the problems
 POST   /v1/sources/{id}/ingest           fetch now, return what was found
 POST   /v1/sources/{id}/schedule         let the worker fetch it on the next tick
 GET    /v1/articles                      raw discovered articles
@@ -94,6 +99,22 @@ GET    /v1/webhooks | DELETE /v1/webhooks/{id} | POST /v1/webhooks/{id}/test | G
 POST   /v1/admin/cycle | /v1/admin/enrich | /v1/admin/tag | /v1/admin/retention
 GET    /health                           public; 200 if the worker heartbeat is fresh, else 503
 ```
+
+## 3b. Adding a news site by its sitemap
+
+The fastest way to grow coverage. Needs the **admin** key.
+
+1. Find the site's sitemap: open `https://<site>/robots.txt` and copy a `Sitemap:` line, preferring one with
+   "news" in it (a Google News sitemap lists the last ~48h of articles with titles). A sitemap index or an RSS
+   feed also works.
+2. Dry run: `POST /v1/sitemaps/check {"sitemap_url": "..."}`. It reports `ok`, `kind` (news / standard /
+   index / rss), `fresh_articles`, a `sample` of headlines, `problems` (blocking) and `warnings`.
+3. Add it: `POST /v1/sitemaps {"sitemap_url": "...", "name": "Al Jazeera", "region": "Global",
+   "default_category": "World"}`. `region` and `default_category` must be values from `GET /v1/taxonomy`.
+   The response holds the new source, the check and the first ingest's counts.
+
+Refused (400) when robots.txt blocks our crawler, the URL is not a sitemap or feed, it has no articles from
+the last 72h (an archive), it is already a source, or it points at a private/internal address.
 
 ## 4. The story object (what the app renders)
 
@@ -145,6 +166,11 @@ Verify the signature, return 2xx quickly. Failures retry with backoff up to 8 ti
 6. **Real-time:** subscribe a webhook to `story.trending` for "post about this now" nudges.
 
 ## 7. Limits and behaviour to know
+
+- Labels cover general news (World, Politics, Business, Economy, Markets, Technology, Science, Health,
+  Environment, Sports, Entertainment, Culture, Lifestyle, Travel, Education, Crime & Justice) plus the
+  startup/tech depth labels. Regions: Global, India, Karnataka, US, UK, Europe, Middle East, Asia-Pacific,
+  China, Africa, Latin America, Australia. Always read them from `GET /v1/taxonomy`.
 
 - Stories cover the last ~72h by default (`since_hours` up to 720 for lists; `KEEP_STORY_DAYS`=30 retention).
 - Without an LLM key, tags come from keyword rules (`tag_status: "rules"`): good for filters, weaker on

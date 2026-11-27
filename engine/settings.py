@@ -38,7 +38,7 @@ class Settings:
     default_interval_min: int = field(default_factory=lambda: _int("DEFAULT_SOURCE_INTERVAL_MIN", 20))
     max_article_age_hours: int = field(default_factory=lambda: _int("MAX_ARTICLE_AGE_HOURS", 72))
     max_response_bytes: int = field(default_factory=lambda: _int("MAX_RESPONSE_BYTES", 8_000_000))
-    enrich_batch: int = field(default_factory=lambda: _int("ENRICH_BATCH", 25))
+    enrich_batch: int = field(default_factory=lambda: _int("ENRICH_BATCH", 40))
     tag_batch: int = field(default_factory=lambda: _int("TAG_BATCH", 10))
 
     # clustering

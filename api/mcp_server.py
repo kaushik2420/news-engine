@@ -25,6 +25,7 @@ Typical flows:
   (or generate_post if the engine has an LLM key). Always attribute facts to the sources in the brief.
 - Learn: record_event(profile_id, story_id, type) for click/save/posted/dismiss to personalise future feeds.
 - Operate: engine_status, list_sources, add_source (homepage alone is enough), check_source_now, list_runs.
+- Add a site by sitemap: check_sitemap(url) first, then add_sitemap(url, name, region, default_category).
 Display rule: show `summary` (engine-written) and link out via `links`. `excerpt` is publisher text: short, attributed, optional.
 """
 
@@ -142,6 +143,30 @@ async def add_source(id: str, name: str, homepage: str | None = None, sitemap_ur
                                       region=region, default_category=default_category, interval_min=interval_min).items() if v is not None}
         return service.create_source(data)
     return await _run(go)
+
+
+@mcp.tool(description="Dry run (admin): fetch a sitemap URL and report if the engine can use it: robots permission, "
+                      "kind (news/standard/index/rss), how many fresh articles, a sample, and any problems. Saves nothing.")
+async def check_sitemap(sitemap_url: str) -> dict:
+    try:
+        require_admin()
+        return await ingest.probe_sitemap(runtime.get_fetcher(), sitemap_url.strip())
+    except PermissionError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description="Add a news source from its sitemap URL (admin): checks it, creates the source and runs the first "
+                      "ingest. Optional: name, region and default_category (taxonomy values), rss_url, interval_min.")
+async def add_sitemap(sitemap_url: str, name: str | None = None, region: str | None = None,
+                      default_category: str | None = None, rss_url: str | None = None,
+                      interval_min: int | None = None) -> dict:
+    try:
+        require_admin()
+        data = {k: v for k, v in dict(sitemap_url=sitemap_url, name=name, region=region, default_category=default_category,
+                                      rss_url=rss_url, interval_min=interval_min).items() if v is not None}
+        return await ingest.add_sitemap(runtime.get_fetcher(), data)
+    except (PermissionError, service.Invalid) as e:
+        return {"error": str(e)}
 
 
 @mcp.tool(description="Change a source (admin): any of name, homepage, rss_url, sitemap_url, listing_url, link_pattern, "

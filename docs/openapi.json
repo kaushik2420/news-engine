@@ -1254,6 +1254,86 @@
     }
    }
   },
+  "/v1/sitemaps/check": {
+   "post": {
+    "tags": [
+     "sitemaps"
+    ],
+    "summary": "Check Sitemap",
+    "description": "Dry run: fetch the sitemap and report whether the engine can use it. Saves nothing.",
+    "operationId": "check_sitemap_v1_sitemaps_check_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SitemapCheckIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/sitemaps": {
+   "post": {
+    "tags": [
+     "sitemaps"
+    ],
+    "summary": "Add Sitemap",
+    "description": "Check the sitemap, create a source for it, and run its first ingest right away.",
+    "operationId": "add_sitemap_v1_sitemaps_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SitemapIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/v1/articles": {
    "get": {
     "tags": [
@@ -1976,6 +2056,119 @@
     },
     "type": "object",
     "title": "ProfileIn"
+   },
+   "SitemapCheckIn": {
+    "properties": {
+     "sitemap_url": {
+      "type": "string",
+      "title": "Sitemap Url",
+      "description": "News sitemap URL (best), a standard sitemap or sitemap index, or an RSS feed"
+     }
+    },
+    "type": "object",
+    "required": [
+     "sitemap_url"
+    ],
+    "title": "SitemapCheckIn"
+   },
+   "SitemapIn": {
+    "properties": {
+     "sitemap_url": {
+      "type": "string",
+      "title": "Sitemap Url",
+      "description": "News sitemap URL (best), a standard sitemap or sitemap index, or an RSS feed"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name",
+      "description": "Display name, e.g. 'Al Jazeera'. Default: from the domain"
+     },
+     "id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Id",
+      "description": "Lowercase slug. Default: from the domain"
+     },
+     "region": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Region",
+      "description": "Home region from the taxonomy, e.g. 'Europe'"
+     },
+     "default_category": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Default Category",
+      "description": "Taxonomy category for stories the tagger can't place"
+     },
+     "rss_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rss Url",
+      "description": "Optional RSS feed of the same site (adds summaries and images)"
+     },
+     "homepage": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Homepage"
+     },
+     "interval_min": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 1440.0,
+        "minimum": 5.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Interval Min",
+      "description": "How often to check, in minutes (default 20)"
+     }
+    },
+    "type": "object",
+    "required": [
+     "sitemap_url"
+    ],
+    "title": "SitemapIn"
    },
    "SourceIn": {
     "properties": {

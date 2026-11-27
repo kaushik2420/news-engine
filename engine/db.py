@@ -70,6 +70,15 @@ stories = Table(
     Column("tags", JSON),
     Column("postability", Integer, default=0),
     Column("trending_notified", Boolean, default=False),
+    # tags copied into plain columns so filters, sorts and paging run in SQL ("|AI|Fintech|" style lists)
+    Column("cat_text", Text),
+    Column("region_text", Text),
+    Column("audience_text", Text),
+    Column("news_type", String(64)),
+    Column("tone", String(32)),
+    Column("shelf_life", String(32)),
+    Column("is_roundup", Boolean, default=False),
+    Column("search_text", Text),                     # lowercased headline + summary + entities
     Column("created_at", DateTime, default=utcnow),
 )
 
@@ -153,6 +162,59 @@ kv = Table(
 )
 
 Index("ix_stories_tag_queue", stories.c.tag_status, stories.c.updated_at)
+Index("ix_stories_source_count", stories.c.source_count, stories.c.updated_at)
+Index("ix_stories_postability", stories.c.postability, stories.c.updated_at)
+
+# columns added after v1; migrate() adds them to databases created before they existed
+LATER_COLUMNS = {"stories": {"cat_text": "TEXT", "region_text": "TEXT", "audience_text": "TEXT",
+                             "news_type": "VARCHAR(64)", "tone": "VARCHAR(32)", "shelf_life": "VARCHAR(32)",
+                             "is_roundup": "BOOLEAN DEFAULT FALSE", "search_text": "TEXT"}}
+
+
+def bar(values) -> str:
+    """["AI","Fintech"] -> "|AI|Fintech|" so `LIKE '%|AI|%'` matches whole values only."""
+    vals = [v for v in (values or []) if v]
+    return "|" + "|".join(vals) + "|" if vals else ""
+
+
+def tag_columns(tags: dict | None, headline: str = "", summary: str | None = "") -> dict:
+    t = tags or {}
+    words = " ".join([headline or "", t.get("summary") or summary or "", " ".join(t.get("entities") or [])])
+    return {"cat_text": bar(t.get("category")), "region_text": bar(t.get("region")),
+            "audience_text": bar(t.get("audience")), "news_type": t.get("news_type"), "tone": t.get("tone"),
+            "shelf_life": t.get("shelf_life"), "is_roundup": bool(t.get("is_roundup")),
+            "search_text": words.lower()[:4000]}
+
+
+def migrate(engine: Engine) -> int:
+    """Add missing columns (safe to run on every start, from several processes) and backfill them."""
+    from sqlalchemy import inspect, select, text
+    from sqlalchemy.exc import DBAPIError
+    added = 0
+    for table, cols in LATER_COLUMNS.items():
+        have = {c["name"] for c in inspect(engine).get_columns(table)}
+        for name, ddl in cols.items():
+            if name in have:
+                continue
+            try:
+                with engine.begin() as c:
+                    c.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                added += 1
+            except DBAPIError:      # another process added it first
+                pass
+    for ix in ("ix_stories_source_count ON stories (source_count, updated_at)",
+               "ix_stories_postability ON stories (postability, updated_at)"):
+        try:
+            with engine.begin() as c:
+                c.execute(text(f"CREATE INDEX IF NOT EXISTS {ix}"))
+        except DBAPIError:
+            pass
+    with engine.begin() as c:
+        rows = c.execute(select(stories.c.id, stories.c.tags, stories.c.headline, stories.c.summary)
+                         .where(stories.c.search_text.is_(None))).all()
+        for r in rows:
+            c.execute(stories.update().where(stories.c.id == r.id).values(**tag_columns(r.tags, r.headline, r.summary)))
+    return added
 
 _engine: Engine | None = None
 
@@ -181,6 +243,7 @@ def get_engine() -> Engine:
                 cur.execute("PRAGMA foreign_keys=ON")
                 cur.close()
         metadata.create_all(_engine)
+        migrate(_engine)
     return _engine
 
 

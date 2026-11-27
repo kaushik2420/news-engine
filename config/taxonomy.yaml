@@ -1,7 +1,26 @@
 # Fixed label set. The tagger may ONLY use these values, so filters stay clean.
-# Edit freely: the tagger prompt, the API filters and the app all read from this file.
+# The tagger prompt, the API filters, MCP get_taxonomy and the app all read from this file.
+# Removing a value later is safe (old stories keep it until they age out); renaming one splits a filter.
 
 category:
+  # general news
+  - World
+  - Politics
+  - Business
+  - Economy
+  - Markets
+  - Technology
+  - Science
+  - Health
+  - Environment
+  - Sports
+  - Entertainment
+  - Culture
+  - Lifestyle
+  - Travel
+  - Education
+  - Crime & Justice
+  # startup / tech depth (kept from v1)
   - Startups
   - Funding
   - AI
@@ -9,41 +28,60 @@ category:
   - Ecommerce
   - Cybersecurity
   - Deeptech
-  - Policy
-  - Leadership
   - Big Tech
   - Social Media
-  - Education
   - Mobility
-  - Markets
+  - Policy
+  - Leadership
 
 news_type:
+  - Breaking news
   - Funding round
   - Product launch
   - Leadership change
   - Policy / regulation
+  - Election
   - IPO / markets
+  - Earnings / results
   - Data breach
+  - Disaster / emergency
+  - Conflict
+  - Match / event result
+  - Research / study
+  - Review
+  - Interview
   - Analysis / opinion
+  - Feature
   - Market data
   - Partnership / deal
   - Government programme
 
 audience:
+  - General audience
   - Founders
+  - Business leaders
   - Investors
   - Marketers
   - Product & tech
   - Creators
   - Job seekers
   - Students
+  - Sports fans
+  - Policy watchers
 
 region:
+  - Global
   - India
   - Karnataka
   - US
+  - UK
+  - Europe
   - Middle East
-  - Global
+  - Asia-Pacific
+  - China
+  - Africa
+  - Latin America
+  - Australia
 
 tone:
   - Positive

@@ -79,7 +79,8 @@ class Clusterer:
                 id=sid, headline=article["title"], summary=article.get("summary") or "",
                 published_at=published, updated_at=published, source_count=1, article_count=1,
                 tokens=sorted(stored)[:MAX_STORY_TOKENS], tag_status="pending",
-                tags={"is_roundup": True} if roundup else {}, created_at=db.utcnow()))
+                tags={"is_roundup": True} if roundup else {}, created_at=db.utcnow(),
+                **db.tag_columns({"is_roundup": roundup}, article["title"], article.get("summary"))))
             conn.execute(db.articles.update().where(db.articles.c.id == article["id"]).values(story_id=sid))
             self.stories[sid] = (stored, published)
             self.df.update(toks)

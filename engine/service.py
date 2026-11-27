@@ -10,7 +10,7 @@ import re
 import secrets
 from datetime import timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from . import db, generate, llm, rank, tagger, webhooks
 from . import settings as S
@@ -34,7 +34,8 @@ def _story_out(r, arts: list, full: bool = False) -> dict:
     tags = dict(r.tags or {})
     llm_summary = tags.pop("summary", None) if r.tag_status == "done" else None
     tags.pop("summary", None)
-    is_roundup = tags.pop("is_roundup", False)
+    is_roundup = bool(getattr(r, "is_roundup", False) or tags.pop("is_roundup", False))
+    tags.pop("is_roundup", None)
     excerpt = (r.summary or "")[:240]
     out = {
         "id": r.id, "headline": r.headline,
@@ -71,22 +72,53 @@ def _articles_for(c, story_ids: list[str]) -> dict[str, list]:
     return out
 
 
-def _load(since_hours: int, include_untagged: bool = True, story_ids: list[str] | None = None) -> list[dict]:
-    q = select(db.stories)
-    if story_ids is not None:
-        q = q.where(db.stories.c.id.in_(story_ids))
-    else:
-        q = q.where(db.stories.c.updated_at >= db.utcnow() - timedelta(hours=since_hours))
-        if not include_untagged:
-            q = q.where(db.stories.c.tag_status != "pending")
+FEED_POOL = 3000       # newest matching stories the feed ranker considers
+LIST_FILTERS = {"category": "cat_text", "region": "region_text", "audience": "audience_text"}
+EXACT_FILTERS = ("news_type", "tone", "shelf_life")
+
+
+def _where(*, since_hours: int | None, filters: dict | None = None, q: str | None = None, source_id: str | None = None,
+           min_sources: int = 1, min_postability: int = 0, include_untagged: bool = True,
+           include_roundups: bool = False, exclude: set[str] | None = None) -> list:
+    """SQL conditions for a story query. List labels match whole values: cat_text LIKE '%|AI|%'."""
+    st = db.stories.c
+    cond = []
+    if since_hours is not None:
+        cond.append(st.updated_at >= db.utcnow() - timedelta(hours=since_hours))
+    for key, col in LIST_FILTERS.items():
+        wanted = [v for v in (filters or {}).get(key) or [] if v]
+        if wanted:
+            cond.append(or_(*[getattr(st, col).like(f"%|{v}|%") for v in wanted]))
+    for key in EXACT_FILTERS:
+        wanted = [v for v in (filters or {}).get(key) or [] if v]
+        if wanted:
+            cond.append(getattr(st, key).in_(wanted))
+    for w in [w for w in re.findall(r"\w+", (q or "").lower()) if len(w) > 1][:8]:
+        cond.append(st.search_text.like(f"%{w}%"))
+    if source_id:
+        cond.append(st.id.in_(select(db.articles.c.story_id).where(db.articles.c.source_id == source_id)))
+    if min_sources > 1:
+        cond.append(st.source_count >= min_sources)
+    if min_postability > 0:
+        cond.append(st.postability >= min_postability)
+    if not include_untagged:
+        cond.append(st.tag_status != "pending")
+    if not include_roundups:
+        cond.append(or_(st.is_roundup.is_(None), st.is_roundup.is_(False)))
+    if exclude:
+        cond.append(st.id.notin_(list(exclude)))
+    return cond
+
+
+def _fetch(cond: list, order: list, limit: int, offset: int = 0, full: bool = False) -> list[dict]:
     with db.get_engine().connect() as c:
-        rows = c.execute(q.order_by(db.stories.c.updated_at.desc()).limit(5000)).all()
+        rows = c.execute(select(db.stories).where(*cond).order_by(*order).limit(limit).offset(offset)).all()
         arts = _articles_for(c, [r.id for r in rows])
     out = []
     for r in rows:
-        s = _story_out(r, arts.get(r.id, []), full=story_ids is not None)
-        s["_updated"] = r.updated_at
-        out.append(s)
+        item = _story_out(r, arts.get(r.id, []), full=full)
+        item["_updated"] = r.updated_at
+        out.append(item)
     return out
 
 
@@ -135,36 +167,23 @@ def list_stories(*, category=None, news_type=None, audience=None, region=None, t
                  source_id: str | None = None, q: str | None = None, since_hours: int = 72, min_sources: int = 1,
                  min_postability: int = 0, sort: str = "latest", include_untagged: bool = True,
                  include_roundups: bool = False, limit: int = 30, offset: int = 0) -> dict:
-    items = _load(since_hours, include_untagged)
+    st = db.stories.c
+    orders = {"latest": [st.updated_at.desc()], "trending": [st.source_count.desc(), st.updated_at.desc()],
+              "postability": [st.postability.desc(), st.updated_at.desc()]}
+    if sort not in orders:
+        raise Invalid("sort must be latest, trending or postability")
     filters = {"category": category, "news_type": news_type, "audience": audience, "region": region,
                "tone": tone, "shelf_life": shelf_life}
-    words = [w for w in re.findall(r"\w+", (q or "").lower()) if len(w) > 1]
-
-    def keep(s):
-        if not rank.matches(s["tags"], filters) or s["source_count"] < min_sources:
-            return False
-        if (s["tags"].get("postability") or 0) < min_postability or (s["is_roundup"] and not include_roundups):
-            return False
-        if source_id and source_id not in {link["source_id"] for link in s["links"]}:
-            return False
-        if words:
-            hay = " ".join([s["headline"], s["summary"] or "", s["excerpt"] or "", " ".join(s["tags"].get("entities") or [])]).lower()
-            return all(w in hay for w in words)
-        return True
-
-    items = [s for s in items if keep(s)]
-    if sort == "trending":
-        items.sort(key=lambda s: (s["source_count"], s["_updated"]), reverse=True)
-    elif sort == "postability":
-        items.sort(key=lambda s: ((s["tags"].get("postability") or 0), s["_updated"]), reverse=True)
-    elif sort != "latest":
-        raise Invalid("sort must be latest, trending or postability")
-    total = len(items)
-    return {"total": total, "offset": offset, "limit": limit, "items": _strip(items[offset: offset + limit])}
+    cond = _where(since_hours=since_hours, filters=filters, q=q, source_id=source_id, min_sources=min_sources,
+                  min_postability=min_postability, include_untagged=include_untagged, include_roundups=include_roundups)
+    with db.get_engine().connect() as c:
+        total = c.execute(select(func.count()).select_from(db.stories).where(*cond)).scalar()
+    items = _fetch(cond, orders[sort] + [st.id], limit, offset)
+    return {"total": total, "offset": offset, "limit": limit, "items": _strip(items)}
 
 
 def get_story(story_id: str) -> dict:
-    items = _load(0, story_ids=[story_id])
+    items = _fetch([db.stories.c.id == story_id], [db.stories.c.id], 1, full=True)
     if not items:
         raise NotFound(f"story {story_id} not found")
     return _strip(items)[0]
@@ -245,8 +264,9 @@ def feed(*, profile_id: str | None = None, profile: dict | None = None, filters:
                     db.events.c.profile_id == profile_id, db.events.c.type.in_(["dismiss", "posted"]))).all()}
     elif profile:
         prof = {"data": _clean_profile(profile), "weights": {}}
-    items = [s for s in _load(since_hours, include_untagged) if not s["is_roundup"]]
-    ranked = rank.build_feed(items, prof, filters or {}, limit, db.utcnow(), exclude=seen)
+    cond = _where(since_hours=since_hours, filters=filters, include_untagged=include_untagged, exclude=seen)
+    pool = _fetch(cond, [db.stories.c.updated_at.desc()], FEED_POOL)
+    ranked = rank.build_feed(pool, prof, {}, limit, db.utcnow())
     return {"profile_id": profile_id, "count": len(ranked), "items": _strip(ranked)}
 
 

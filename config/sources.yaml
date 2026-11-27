@@ -35,6 +35,111 @@ sources:
     default_category: Startups
     interval_min: 20
 
+  # ---- World and general news (verified 2026-11-27: news sitemap in robots.txt, User-agent * allowed) ----
+  - id: aljazeera
+    name: Al Jazeera
+    homepage: https://www.aljazeera.com/
+    sitemap_url: https://www.aljazeera.com/news-sitemap.xml
+    region: Global
+    default_category: World
+    interval_min: 15
+
+  - id: npr
+    name: NPR
+    homepage: https://www.npr.org/
+    sitemap_url: https://googlecrawl.npr.org/news/sitemap_news.xml
+    region: US
+    default_category: World
+    interval_min: 15
+
+  - id: euronews
+    name: Euronews
+    homepage: https://www.euronews.com/
+    sitemap_url: https://www.euronews.com/news.xml
+    region: Europe
+    default_category: World
+    interval_min: 15
+
+  - id: wion
+    name: WION
+    homepage: https://www.wionews.com/
+    sitemap_url: https://www.wionews.com/sitemaps/news-sitemap.xml
+    region: Global
+    default_category: World
+    interval_min: 15
+
+  - id: theprint
+    name: ThePrint
+    homepage: https://theprint.in/
+    sitemap_url: https://theprint.in/googlenews.xml
+    region: India
+    default_category: Politics
+    interval_min: 15
+
+  - id: scroll
+    name: Scroll
+    homepage: https://scroll.in/
+    sitemap_url: https://scroll.in/sitemap/news-sitemap.xml
+    region: India
+    default_category: Politics
+    interval_min: 20
+
+  - id: business-standard
+    name: Business Standard
+    homepage: https://www.business-standard.com/
+    sitemap_url: https://www.business-standard.com/sitemap/news-sitemap.xml
+    region: India
+    default_category: Business
+    interval_min: 15
+
+  - id: sportskeeda
+    name: Sportskeeda
+    homepage: https://www.sportskeeda.com/
+    sitemap_url: https://www.sportskeeda.com/news-sitemap.xml
+    region: Global
+    default_category: Sports
+    interval_min: 20
+
+  # ---- General sitemaps only: homepage given, the engine finds RSS + sitemap itself ----
+  - id: cbs-news
+    name: CBS News
+    homepage: https://www.cbsnews.com/
+    region: US
+    default_category: World
+    interval_min: 20
+
+  - id: sky-sports
+    name: Sky Sports
+    homepage: https://www.skysports.com/
+    region: UK
+    default_category: Sports
+    interval_min: 20
+
+  - id: abc-australia
+    name: ABC News (Australia)
+    homepage: https://www.abc.net.au/news
+    region: Australia
+    default_category: World
+    interval_min: 20
+
+  - id: scmp
+    name: South China Morning Post
+    homepage: https://www.scmp.com/
+    region: Asia-Pacific
+    default_category: World
+    interval_min: 20
+
+  - id: sciencedaily
+    name: ScienceDaily
+    homepage: https://www.sciencedaily.com/
+    region: Global
+    default_category: Science
+    interval_min: 30
+
+  # Not added: blocked to our checks (BBC, Guardian, AP, Reuters-class outlets, The Hindu, HT, Indian Express, NDTV,
+  # DW, CNA, Independent, Livemint, Moneycontrol, Firstpost, IGN, The Conversation, France24), paid bot access via
+  # TollBit (Variety, Deadline), or articles closed to AI crawlers (phys.org, medicalxpress).
+
   # Add more by homepage alone; the engine discovers the rest. Examples to evaluate:
   # - {id: entrackr, name: Entrackr, homepage: https://entrackr.com/, region: India, default_category: Startups}
   # - {id: moneycontrol-startups, name: Moneycontrol, homepage: https://www.moneycontrol.com/, region: India, default_category: Markets}

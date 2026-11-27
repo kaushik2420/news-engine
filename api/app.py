@@ -129,6 +129,20 @@ class SourcePatch(BaseModel):
     autodiscover: bool | None = None
 
 
+class SitemapCheckIn(BaseModel):
+    sitemap_url: str = Field(..., description="News sitemap URL (best), a standard sitemap or sitemap index, or an RSS feed")
+
+
+class SitemapIn(SitemapCheckIn):
+    name: str | None = Field(None, description="Display name, e.g. 'Al Jazeera'. Default: from the domain")
+    id: str | None = Field(None, description="Lowercase slug. Default: from the domain")
+    region: str | None = Field(None, description="Home region from the taxonomy, e.g. 'Europe'")
+    default_category: str | None = Field(None, description="Taxonomy category for stories the tagger can't place")
+    rss_url: str | None = Field(None, description="Optional RSS feed of the same site (adds summaries and images)")
+    homepage: str | None = None
+    interval_min: int | None = Field(None, ge=5, le=1440, description="How often to check, in minutes (default 20)")
+
+
 class WebhookIn(BaseModel):
     url: str
     events: list[str] | None = None
@@ -285,6 +299,19 @@ async def ingest_now(source_id: str):
         return await ingest.ingest_source(runtime.get_fetcher(), source_id)
     except KeyError:
         raise HTTPException(404, f"source {source_id} not found")
+
+
+# ------------------------------------------------------------------ sitemaps (add a source from a sitemap URL)
+@router.post("/v1/sitemaps/check", tags=["sitemaps"], dependencies=[Depends(admin)])
+async def check_sitemap(body: SitemapCheckIn):
+    """Dry run: fetch the sitemap and report whether the engine can use it. Saves nothing."""
+    return await ingest.probe_sitemap(runtime.get_fetcher(), body.sitemap_url.strip())
+
+
+@router.post("/v1/sitemaps", tags=["sitemaps"], status_code=201, dependencies=[Depends(admin)])
+async def add_sitemap(body: SitemapIn):
+    """Check the sitemap, create a source for it, and run its first ingest right away."""
+    return await ingest.add_sitemap(runtime.get_fetcher(), body.model_dump(exclude_none=True))
 
 
 # ------------------------------------------------------------------ articles
